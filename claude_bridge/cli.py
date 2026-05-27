@@ -15,14 +15,17 @@ def main(argv: list[str] | None = None) -> int:
         description="Real-time cross-machine MCP relay server for Claude Code agents.",
     )
     parser.add_argument("--host", default="0.0.0.0",
-                        help="Interface to bind (default: 0.0.0.0 — all interfaces)")
+                        help="Interface to bind for HTTP/SSE (default: 0.0.0.0 — all interfaces)")
     parser.add_argument("--port", type=int, default=8765,
-                        help="Port to listen on (default: 8765)")
+                        help="Port to listen on for HTTP/SSE (default: 8765)")
     parser.add_argument("--db", default=None,
                         help="SQLite database path (default: ./claude-bridge.db, "
                              "or the value of the CLAUDE_BRIDGE_DB env var)")
     parser.add_argument("--no-dashboard", action="store_true",
-                        help="Disable the web dashboard mount at /")
+                        help="Disable the web dashboard mount at / (HTTP mode only)")
+    parser.add_argument("--stdio", action="store_true",
+                        help="Run as a stdio MCP server (no HTTP, no dashboard) — "
+                             "for single-process / local subprocess use")
     parser.add_argument("--version", action="version",
                         version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
@@ -39,6 +42,28 @@ def main(argv: list[str] | None = None) -> int:
     except (AttributeError, OSError):
         pass
 
+    if args.stdio:
+        return _run_stdio()
+    return _run_http(args)
+
+
+def _run_stdio() -> int:
+    """Run the bridge as a stdio MCP server. No banner — stdout is reserved
+    for JSON-RPC traffic."""
+    import asyncio
+
+    from . import server as bridge_server
+
+    bridge_server.db()  # initialize DB before serving
+    try:
+        asyncio.run(bridge_server.run_stdio())
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def _run_http(args: argparse.Namespace) -> int:
+    """Run the bridge on uvicorn (HTTP + SSE + web dashboard)."""
     import uvicorn
 
     from . import server as bridge_server

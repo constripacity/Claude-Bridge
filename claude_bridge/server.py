@@ -35,7 +35,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.requests import Request
 
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
@@ -528,6 +528,24 @@ async def handle_post_message(scope, receive, send):
         await sse_transport.handle_post_message(scope, receive, send)
     except (anyio.ClosedResourceError, anyio.BrokenResourceError):
         pass
+
+
+# ── stdio Transport ───────────────────────────────────────────────────────────
+
+async def run_stdio() -> None:
+    """Run the MCP server over stdin/stdout (no HTTP, no dashboard).
+
+    For single-process / local-only deployments where the MCP client spawns
+    the bridge as a subprocess. Uses the same SQLite store as HTTP mode, so
+    a `claude-bridge --stdio` server and a `claude-bridge` HTTP server pointed
+    at the same `--db` path share state.
+    """
+    from mcp.server.stdio import stdio_server
+
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream, write_stream, server.create_initialization_options()
+        )
 
 
 # ── App ───────────────────────────────────────────────────────────────────────

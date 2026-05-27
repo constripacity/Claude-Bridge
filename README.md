@@ -55,6 +55,8 @@ claude-bridge                       # defaults: 0.0.0.0:8765, ./claude-bridge.db
 claude-bridge --port 9000 --db /var/lib/claude-bridge/bridge.db
 # or disable the web dashboard if you only want the MCP transport:
 claude-bridge --no-dashboard
+# or run as a pure stdio MCP server (no HTTP, no dashboard, no banner):
+claude-bridge --stdio
 ```
 
 ```
@@ -81,6 +83,13 @@ claude mcp add --transport sse -s user claude-bridge http://localhost:8765/sse
 **Remote machines** — point at the host's reachable address (LAN IP, Tailscale IP, or any other network route):
 ```bash
 claude mcp add --transport sse -s user claude-bridge http://<host-address>:8765/sse
+```
+
+**Single-machine / stdio mode** — when there's no need for cross-machine reach, Claude Code can spawn the bridge as a subprocess and talk to it over stdin/stdout, no HTTP at all:
+```bash
+claude mcp add -s user claude-bridge -- claude-bridge --stdio
+# share the SQLite store with an HTTP instance if you also run one:
+claude mcp add -s user claude-bridge -- claude-bridge --stdio --db /path/to/shared.db
 ```
 
 Use `-s user` to share the entry across all your projects, or `-s local` to scope it to one. Verify with `claude mcp list` — `claude-bridge` should show as `✓ Connected`. If a Claude Code session is already running, type `/mcp` inside it to re-handshake (or restart the session) so the new tools register.
@@ -229,8 +238,8 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 - [x] Optional SQLite persistence (survive server restarts)
 - [x] Web dashboard (live channel monitor in the browser)
 - [x] `claude-bridge` PyPI package + CLI entrypoint
+- [x] stdio transport (for pure local use without HTTP)
 - [ ] Auth token support (shared secret per channel or global)
-- [ ] stdio transport (for pure local use without HTTP)
 - [ ] Submit to [MCP server directory](https://github.com/modelcontextprotocol/servers)
 - [ ] WebSocket transport (alternative to SSE) — *deferred unless requested*
 

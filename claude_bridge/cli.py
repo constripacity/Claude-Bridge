@@ -23,6 +23,11 @@ def main(argv: list[str] | None = None) -> int:
                              "or the value of the CLAUDE_BRIDGE_DB env var)")
     parser.add_argument("--no-dashboard", action="store_true",
                         help="Disable the web dashboard mount at / (HTTP mode only)")
+    parser.add_argument("--auth-token", default=None,
+                        help="Require Authorization: Bearer <token> on every endpoint "
+                             "except /status (HTTP mode only). Also reads "
+                             "CLAUDE_BRIDGE_AUTH_TOKEN env var; the CLI flag wins. "
+                             "If unset, the bridge runs without auth (default).")
     parser.add_argument("--stdio", action="store_true",
                         help="Run as a stdio MCP server (no HTTP, no dashboard) — "
                              "for single-process / local subprocess use")
@@ -36,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["CLAUDE_BRIDGE_DB"] = args.db
     if args.no_dashboard:
         os.environ["CLAUDE_BRIDGE_NO_DASHBOARD"] = "1"
+    if args.auth_token:
+        os.environ["CLAUDE_BRIDGE_AUTH_TOKEN"] = args.auth_token
 
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -78,6 +85,8 @@ def _run_http(args: argparse.Namespace) -> int:
     print(f"  http://<host-address>:{args.port}/sse    ← Remote machines (LAN/Tailscale)")
     print(f"  http://localhost:{args.port}/api/state    ← JSON state for dashboard")
     print(f"  http://localhost:{args.port}/status       ← Health check")
+    if bridge_server.AUTH_TOKEN:
+        print(f"  Auth: Bearer token required (set via CLAUDE_BRIDGE_AUTH_TOKEN / --auth-token)")
     print(bar)
     sys.stdout.flush()
 

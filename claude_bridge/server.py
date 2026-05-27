@@ -34,10 +34,13 @@ from starlette.responses import JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.requests import Request
 
+from .auth import BearerAuthMiddleware
+
 
 VERSION = "0.6.1"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+AUTH_TOKEN = os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -568,12 +571,18 @@ if os.path.isdir(WEB_DIR) and not os.environ.get("CLAUDE_BRIDGE_NO_DASHBOARD"):
 app = Starlette(
     routes=_routes,
     middleware=[
+        # CORS first (outermost) so OPTIONS preflight doesn't get blocked by
+        # the auth check before browsers can complete the handshake.
         Middleware(
             CORSMiddleware,
             allow_origins=["*"],
             allow_methods=["*"],
             allow_headers=["*"],
-        )
+        ),
+        # Bearer-token auth — no-op when AUTH_TOKEN is None (opt-in).
+        # token_getter reads at request time so monkeypatch and runtime
+        # rotation both work without rebuilding the app.
+        Middleware(BearerAuthMiddleware, token_getter=lambda: AUTH_TOKEN),
     ],
 )
 

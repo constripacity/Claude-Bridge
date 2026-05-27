@@ -94,7 +94,7 @@ def _run_http(args: argparse.Namespace) -> int:
     print(f"  http://localhost:{args.port}/api/state    ← JSON state for dashboard")
     print(f"  http://localhost:{args.port}/status       ← Health check")
     if bridge_server.AUTH_TOKEN:
-        print(f"  Auth: Bearer token required (set via CLAUDE_BRIDGE_AUTH_TOKEN / --auth-token)")
+        print("  Auth: Bearer token required (set via CLAUDE_BRIDGE_AUTH_TOKEN / --auth-token)")
     print(bar)
     sys.stdout.flush()
 

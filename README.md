@@ -52,7 +52,9 @@ pip install -e .[dev]              # editable install with test/lint deps
 ### 2. Start the server
 
 ```bash
-claude-bridge                       # defaults: 0.0.0.0:8765, ./claude-bridge.db
+claude-bridge                       # defaults: 127.0.0.1:8765, ./claude-bridge.db
+# accept connections from other machines on the network:
+claude-bridge --host 0.0.0.0
 # or pick a custom port / db path:
 claude-bridge --port 9000 --db /var/lib/claude-bridge/bridge.db
 # or disable the web dashboard if you only want the MCP transport:
@@ -61,10 +63,12 @@ claude-bridge --no-dashboard
 claude-bridge --stdio
 ```
 
+> The default bind changed in v0.7.3 from `0.0.0.0` to `127.0.0.1` so a fresh install on a laptop doesn't silently expose the bridge to whatever network it's on. Pass `--host 0.0.0.0` (or a specific interface IP) when you actually want cross-machine reach. Combine with [Authentication](#authentication) for anything less trusted than your own LAN/tailnet.
+
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Claude Bridge — General MCP Relay Server
-  Version: 0.6.0
+  Version: 0.7.3
   http://localhost:8765/             ← Dashboard
   http://localhost:8765/sse          ← Local MCP config
   http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)
@@ -82,7 +86,7 @@ Use the `claude mcp add` CLI on every machine that should use the bridge — inc
 claude mcp add --transport sse -s user claude-bridge http://localhost:8765/sse
 ```
 
-**Remote machines** — point at the host's reachable address (LAN IP, Tailscale IP, or any other network route):
+**Remote machines** — point at the host's reachable address (LAN IP, Tailscale IP, or any other network route). Make sure the host bridge was started with `--host 0.0.0.0` (or the specific interface IP) — the default `127.0.0.1` only accepts local connections.
 ```bash
 claude mcp add --transport sse -s user claude-bridge http://<host-address>:8765/sse
 ```
@@ -227,13 +231,21 @@ Design reference for every layout (full / compact / narrow / states) lives in `d
 The bridge runs **without auth by default** — anyone who can reach `:8765` can read or write any channel. That's fine for `localhost`, a trusted LAN, or a tailnet. If you need to expose the bridge to a less-trusted network, set a token:
 
 ```bash
+# Recommended: env var (token never appears in `ps` output)
 export CLAUDE_BRIDGE_AUTH_TOKEN="$(openssl rand -hex 32)"
 claude-bridge
-# or pass it directly on the CLI (CLI wins over env var):
+
+# Or read it from a file (safer than --auth-token on shared hosts)
+echo "$(openssl rand -hex 32)" > /etc/claude-bridge/token
+chmod 600 /etc/claude-bridge/token
+claude-bridge --auth-token-file /etc/claude-bridge/token
+
+# Or the literal value on the CLI — easy but the value shows up in `ps`
+# output and /proc/<pid>/cmdline; fine for local dev, avoid on shared hosts
 claude-bridge --auth-token "$(openssl rand -hex 32)"
 ```
 
-When set, every endpoint except `/status` (the healthcheck) requires `Authorization: Bearer <token>`. Constant-time comparison; no other state. Unset the env var and the bridge runs exactly as it did before — auth is fully opt-in.
+Precedence: `--auth-token > --auth-token-file > CLAUDE_BRIDGE_AUTH_TOKEN`. When set, every endpoint except `/status` (the healthcheck) requires `Authorization: Bearer <token>`. Constant-time comparison; no other state. Unset everything and the bridge runs exactly as it did before — auth is fully opt-in.
 
 **Connecting clients with auth on:**
 

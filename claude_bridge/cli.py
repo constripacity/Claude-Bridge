@@ -14,8 +14,9 @@ def main(argv: list[str] | None = None) -> int:
         prog="claude-bridge",
         description="Real-time cross-machine MCP relay server for Claude Code agents.",
     )
-    parser.add_argument("--host", default="0.0.0.0",
-                        help="Interface to bind for HTTP/SSE (default: 0.0.0.0 — all interfaces)")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Interface to bind for HTTP/SSE (default: 127.0.0.1 — localhost only). "
+                             "Pass 0.0.0.0 to accept connections from other machines on the network.")
     parser.add_argument("--port", type=int, default=8765,
                         help="Port to listen on for HTTP/SSE (default: 8765)")
     parser.add_argument("--db", default=None,
@@ -23,11 +24,17 @@ def main(argv: list[str] | None = None) -> int:
                              "or the value of the CLAUDE_BRIDGE_DB env var)")
     parser.add_argument("--no-dashboard", action="store_true",
                         help="Disable the web dashboard mount at / (HTTP mode only)")
-    parser.add_argument("--auth-token", default=None,
+    parser.add_argument("--auth-token", default=None, metavar="TOKEN",
                         help="Require Authorization: Bearer <token> on every endpoint "
-                             "except /status (HTTP mode only). Also reads "
-                             "CLAUDE_BRIDGE_AUTH_TOKEN env var; the CLI flag wins. "
-                             "If unset, the bridge runs without auth (default).")
+                             "except /status (HTTP mode only). Prefer --auth-token-file or "
+                             "the CLAUDE_BRIDGE_AUTH_TOKEN env var; the literal value passed "
+                             "here is visible in `ps` output and /proc/<pid>/cmdline. "
+                             "Precedence: --auth-token > --auth-token-file > env var. "
+                             "Unset = no auth (default).")
+    parser.add_argument("--auth-token-file", default=None, metavar="PATH",
+                        help="Read the auth token from a file (trailing whitespace stripped). "
+                             "Safer than --auth-token because the token never appears in the "
+                             "process command line.")
     parser.add_argument("--cors-origin", action="append", default=None, metavar="ORIGIN",
                         help="Allow this origin to make cross-origin requests "
                              "(repeatable). Default allows only localhost/127.0.0.1/::1 "
@@ -49,6 +56,13 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["CLAUDE_BRIDGE_NO_DASHBOARD"] = "1"
     if args.auth_token:
         os.environ["CLAUDE_BRIDGE_AUTH_TOKEN"] = args.auth_token
+    elif args.auth_token_file:
+        try:
+            with open(args.auth_token_file, encoding="utf-8") as f:
+                os.environ["CLAUDE_BRIDGE_AUTH_TOKEN"] = f.read().strip()
+        except OSError as e:
+            print(f"error: could not read --auth-token-file: {e}", file=sys.stderr)
+            return 2
     if args.cors_origin:
         os.environ["CLAUDE_BRIDGE_CORS_ORIGIN"] = ",".join(args.cors_origin)
 

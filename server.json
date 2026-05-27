@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.constripacity/claude-code-bridge",
+  "description": "MCP relay so Claude Code agents on different machines can exchange messages via named channels.",
+  "repository": {
+    "url": "https://github.com/constripacity/Claude-Bridge",
+    "source": "github"
+  },
+  "version": "0.7.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "claude-code-bridge",
+      "version": "0.7.1",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "--stdio",
+          "valueHint": "--stdio"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CLAUDE_BRIDGE_DB",
+          "description": "SQLite database path (default: ./claude-bridge.db). Share the same path across HTTP and stdio instances to share state.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "CLAUDE_BRIDGE_AUTH_TOKEN",
+          "description": "Optional Bearer token. Only applies to HTTP mode (not stdio). When set, requires Authorization: Bearer <token> on all endpoints except /status.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

@@ -11,7 +11,7 @@ the CLAUDE_BRIDGE_DB environment variable) so they survive server restarts.
 
 Run on the host machine: python server.py
 Host machine connects:   localhost:8765
-Remote machines connect: <host-tailscale-ip>:8765
+Remote machines connect: <host-address>:8765 (LAN IP, Tailscale IP, etc.)
 """
 
 import os
@@ -558,7 +558,7 @@ if __name__ == "__main__":
     print(f"  DB: {os.path.abspath(DB_PATH)}")
     print("  http://localhost:8765/             ← Dashboard")
     print("  http://localhost:8765/sse          ← Local MCP config")
-    print("  http://<tailscale-ip>:8765/sse     ← Remote machines")
+    print("  http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)")
     print("  http://localhost:8765/api/state    ← JSON state for dashboard")
     print("  http://localhost:8765/status       ← Health check")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

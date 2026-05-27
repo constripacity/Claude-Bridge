@@ -56,33 +56,23 @@ python server.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-### 3. Add to Claude Code MCP config on each machine
+### 3. Connect each Claude Code session to the bridge
 
-**Host machine** — `~/.claude/settings.json`:
-```json
-{
-  "mcpServers": {
-    "claude-bridge": {
-      "type": "sse",
-      "url": "http://localhost:8765/sse"
-    }
-  }
-}
+Use the `claude mcp add` CLI on every machine that should use the bridge — including the host. Don't edit `~/.claude/settings.json` directly; current Claude Code rejects the legacy `mcpServers` block at the schema level.
+
+**Host machine** — points at the local server:
+```bash
+claude mcp add --transport sse -s user claude-bridge http://localhost:8765/sse
 ```
 
-**Remote machine** — `~/.claude/settings.json`:
-```json
-{
-  "mcpServers": {
-    "claude-bridge": {
-      "type": "sse",
-      "url": "http://<HOST_TAILSCALE_IP>:8765/sse"
-    }
-  }
-}
+**Remote machines** — point at the host's reachable address (LAN IP, Tailscale IP, or any other network route):
+```bash
+claude mcp add --transport sse -s user claude-bridge http://<host-address>:8765/sse
 ```
 
-That's it. Both Claude Code sessions now have six new tools.
+Use `-s user` to share the entry across all your projects, or `-s local` to scope it to one. Verify with `claude mcp list` — `claude-bridge` should show as `✓ Connected`. If a Claude Code session is already running, type `/mcp` inside it to re-handshake (or restart the session) so the new tools register.
+
+That's it. Every connected Claude Code session now has six new tools.
 
 ---
 
@@ -147,16 +137,16 @@ general:sync             →  cross-project coordination
 
 ---
 
-## Recommended Setup: Tailscale
+## Networking
 
-For cross-machine use, [Tailscale](https://tailscale.com) is the simplest and most secure option:
+The bridge is plain HTTP + Server-Sent Events. As long as the client machine can reach the host's `:8765`, it works — pick whatever connectivity fits your setup:
 
-1. Install Tailscale on both machines
-2. Both machines join your Tailscale network
-3. Use the host machine's Tailscale IP in the remote MCP config
-4. Keep port 8765 firewalled to Tailscale only — no public exposure
-
-This works across networks (home, office, travel) without any port forwarding.
+- **Single machine** — use `localhost`. Nothing to set up.
+- **Same LAN** — use the host's LAN IP (e.g. `192.168.1.42`). No port forwarding needed.
+- **Different networks** (the original motivating case) — use a private overlay between machines:
+  - [Tailscale](https://tailscale.com) is the simplest and what this project is tested against. Install on both machines, join the same tailnet, use the host's tailnet IP in the remote MCP config, and keep `:8765` firewalled to the tailnet — no public exposure.
+  - Other mesh VPNs (ZeroTier, Nebula, headscale) work the same way.
+  - A reverse proxy with auth on a public host also works, but the bridge itself has no auth yet (see roadmap), so don't expose a bare instance to the open internet.
 
 ---
 
@@ -235,7 +225,7 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 
 - Python 3.10+
 - `mcp`, `starlette`, `uvicorn` (see `requirements.txt`)
-- Tailscale (recommended) or shared LAN for cross-machine use
+- A reachable network path between machines — `localhost`, LAN, Tailscale, or any other route (see [Networking](#networking))
 
 ---
 

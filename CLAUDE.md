@@ -171,7 +171,7 @@ job is to:
 
 If the bridge is unreachable:
 - Host: check that `server.py` is running (`python server.py`)
-- Remote: verify Tailscale is connected and use `bridge_ping` to test
+- Remote: verify the host is reachable on the chosen network path (LAN, Tailscale, etc.) and use `bridge_ping` to test
 
 If a message is malformed or missing fields, send an error result:
 ```json

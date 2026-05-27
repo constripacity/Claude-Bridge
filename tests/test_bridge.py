@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-import server as bridge
+import claude_bridge.server as bridge
 
 
 def text(result):

@@ -15,7 +15,6 @@ Design reference: docs/design/terminal/  (React/JSX mockups of every layout).
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import platform
 import sys
@@ -34,7 +33,6 @@ from textual.screen import ModalScreen
 from textual.widgets import (
     DataTable,
     Footer,
-    Header,
     Input,
     Label,
     ListItem,
@@ -42,7 +40,7 @@ from textual.widgets import (
     Static,
 )
 
-from tui_client import (
+from .tui_client import (
     TYPE_COLORS,
     BridgeClient,
     BridgeError,
@@ -604,7 +602,7 @@ class BridgeTUI(App):
             f"[bold #e6edf3]FEED[/]  [bold #7dd3fc]{channel['id']}[/]  "
             f"[#6e7681]·  {n} msgs  ·  {senders} senders  ·  last {last}[/]"
             + (f"  [bold #d97706]· filter: {self.filter_text!r}[/]" if self.filter_text else "")
-            + (f"  [bold #d97706]· PAUSED[/]" if self.paused else "")
+            + ("  [bold #d97706]· PAUSED[/]" if self.paused else "")
         )
 
     # ── Event handlers ──

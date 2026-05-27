@@ -10,8 +10,8 @@ import asyncio
 import httpx
 import pytest
 
-import server as bridge
-from tui_client import (
+import claude_bridge.server as bridge
+from claude_bridge.tui_client import (
     TYPE_COLORS,
     BridgeClient,
     BridgeError,
@@ -30,7 +30,7 @@ def test_sender_color_overrides():
 
 
 def test_sender_color_unknown_is_stable_and_in_palette():
-    from tui_client import SENDER_PALETTE
+    from claude_bridge.tui_client import SENDER_PALETTE
     c1 = sender_color("vps-01")
     c2 = sender_color("vps-01")
     assert c1 == c2

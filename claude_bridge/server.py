@@ -9,9 +9,9 @@ convention: "<project>:<role>", e.g. "demo:orchestrator", "myproject:worker".
 Messages are persisted to SQLite (default: ./claude-bridge.db, override with
 the CLAUDE_BRIDGE_DB environment variable) so they survive server restarts.
 
-Run on the host machine: python server.py
-Host machine connects:   localhost:8765
-Remote machines connect: <host-address>:8765 (LAN IP, Tailscale IP, etc.)
+Run on the host machine: `claude-bridge` (or `python -m claude_bridge`)
+Host machine connects:    localhost:8765
+Remote machines connect:  <host-address>:8765 (LAN IP, Tailscale IP, etc.)
 """
 
 import os
@@ -33,7 +33,6 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.requests import Request
-import uvicorn
 
 
 VERSION = "0.5.1"
@@ -543,7 +542,7 @@ _routes = [
     Route("/sse", endpoint=handle_sse),
     Mount("/messages/", app=handle_post_message),
 ]
-if os.path.isdir(WEB_DIR):
+if os.path.isdir(WEB_DIR) and not os.environ.get("CLAUDE_BRIDGE_NO_DASHBOARD"):
     # Catch-all static mount goes LAST so it doesn't shadow API routes.
     # html=True makes "/" serve index.html.
     _routes.append(Mount("/", app=StaticFiles(directory=WEB_DIR, html=True)))
@@ -561,20 +560,6 @@ app = Starlette(
 )
 
 
-if __name__ == "__main__":
-    import sys
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except (AttributeError, OSError):
-        pass
-    db()  # initialize DB before serving
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("  Claude Bridge — General MCP Relay Server")
-    print(f"  DB: {os.path.abspath(DB_PATH)}")
-    print("  http://localhost:8765/             ← Dashboard")
-    print("  http://localhost:8765/sse          ← Local MCP config")
-    print("  http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)")
-    print("  http://localhost:8765/api/state    ← JSON state for dashboard")
-    print("  http://localhost:8765/status       ← Health check")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    uvicorn.run(app, host="0.0.0.0", port=8765)
+# Direct execution (`python -m claude_bridge` or the `claude-bridge` console
+# script) goes through `claude_bridge.cli:main`. This module just defines the
+# Starlette `app` and stays importable on its own.

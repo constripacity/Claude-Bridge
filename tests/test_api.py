@@ -3,7 +3,7 @@
 import pytest
 from starlette.testclient import TestClient
 
-import server as bridge
+import claude_bridge.server as bridge
 
 
 @pytest.fixture

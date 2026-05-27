@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-bridge"
+description = "Real-time cross-machine MCP relay for Claude Code agents — send and receive messages across named channels."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Constripacity" }]
+keywords = ["mcp", "claude-code", "agent", "bridge", "sse", "relay"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications",
+    "Topic :: Software Development :: Libraries",
+]
+dynamic = ["version"]
+dependencies = [
+    "mcp>=1.0.0",
+    "starlette>=0.27.0",
+    "uvicorn>=0.24.0",
+    "anyio>=4.0",
+]
+
+[project.optional-dependencies]
+tui = [
+    "textual>=0.79.0",
+    "httpx>=0.27.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27.0",
+    "ruff>=0.6",
+    "textual>=0.79.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/constripacity/Claude-Bridge"
+Repository = "https://github.com/constripacity/Claude-Bridge"
+Issues = "https://github.com/constripacity/Claude-Bridge/issues"
+
+[project.scripts]
+claude-bridge = "claude_bridge.cli:main"
+
+[tool.hatch.version]
+path = "claude_bridge/server.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["claude_bridge"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/claude_bridge",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+    "/CONTRIBUTING.md",
+    "/CLAUDE.md",
+    "/pyproject.toml",
+    "/pytest.ini",
+]

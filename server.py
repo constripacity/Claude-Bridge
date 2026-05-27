@@ -36,7 +36,7 @@ from starlette.requests import Request
 import uvicorn
 
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 

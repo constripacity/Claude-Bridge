@@ -28,6 +28,12 @@ def main(argv: list[str] | None = None) -> int:
                              "except /status (HTTP mode only). Also reads "
                              "CLAUDE_BRIDGE_AUTH_TOKEN env var; the CLI flag wins. "
                              "If unset, the bridge runs without auth (default).")
+    parser.add_argument("--cors-origin", action="append", default=None, metavar="ORIGIN",
+                        help="Allow this origin to make cross-origin requests "
+                             "(repeatable). Default allows only localhost/127.0.0.1/::1 "
+                             "on any port. Also reads CLAUDE_BRIDGE_CORS_ORIGIN env var "
+                             "(comma-separated). Passing the CLI flag clears the env "
+                             "value and uses only what's on the command line.")
     parser.add_argument("--stdio", action="store_true",
                         help="Run as a stdio MCP server (no HTTP, no dashboard) — "
                              "for single-process / local subprocess use")
@@ -43,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["CLAUDE_BRIDGE_NO_DASHBOARD"] = "1"
     if args.auth_token:
         os.environ["CLAUDE_BRIDGE_AUTH_TOKEN"] = args.auth_token
+    if args.cors_origin:
+        os.environ["CLAUDE_BRIDGE_CORS_ORIGIN"] = ",".join(args.cors_origin)
 
     try:
         sys.stdout.reconfigure(encoding="utf-8")

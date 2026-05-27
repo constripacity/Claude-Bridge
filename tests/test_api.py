@@ -21,8 +21,11 @@ def test_status(client):
     assert d["service"] == "claude-bridge"
     assert d["status"] == "online"
     assert d["version"] == bridge.VERSION
-    assert d["total_messages"] == 0
-    assert d["channels"] == {}
+    # /status is intentionally a bare healthcheck — no db_path, channels, or
+    # message counts leak from the public endpoint.
+    assert "db_path" not in d
+    assert "channels" not in d
+    assert "total_messages" not in d
 
 
 # ── /api/state ──────────────────────────────────────────────────────────────

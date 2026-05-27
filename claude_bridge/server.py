@@ -34,13 +34,36 @@ from starlette.responses import JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.requests import Request
 
-from .auth import BearerAuthMiddleware
+from .auth import BearerAuthMiddleware, RequestSizeLimitMiddleware
 
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 AUTH_TOKEN = os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None
+
+# CORS: by default only same-origin and localhost (any port) are allowed. To
+# add origins (e.g. when running the dashboard from a separate domain), pass
+# `--cors-origin <origin>` on the CLI or set CLAUDE_BRIDGE_CORS_ORIGIN to a
+# comma-separated list. The wildcard `allow_origins=["*"]` from earlier
+# versions is gone — it let drive-by sites read and write the bridge in any
+# default deployment.
+_CORS_ORIGIN_ENV = os.environ.get("CLAUDE_BRIDGE_CORS_ORIGIN", "").strip()
+CORS_EXTRA_ORIGINS = (
+    [o.strip() for o in _CORS_ORIGIN_ENV.split(",") if o.strip()]
+    if _CORS_ORIGIN_ENV
+    else []
+)
+CORS_LOCALHOST_REGEX = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+
+# Maximum HTTP request body (POST /api/send, /api/clear). Rejecting at the
+# Content-Length header avoids reading the body into memory. Anything larger
+# than this is almost certainly abuse — channel messages are short by design.
+MAX_REQUEST_BYTES = 256 * 1024
+# Maximum length of a single message `content` field, enforced after JSON
+# decode for defense-in-depth (the Content-Length cap above already rejects
+# most abuse; this catches the boundary).
+MAX_MESSAGE_BYTES = 128 * 1024
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -315,7 +338,7 @@ async def dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextConten
 
     # ── bridge_status ────────────────────────────────────────────────────────
     elif name == "bridge_status":
-        per_channel = int(arguments.get("per_channel", 5))
+        per_channel = max(1, min(int(arguments.get("per_channel", 5)), 50))
         conn = db()
         channel_rows = conn.execute(
             "SELECT channel, COUNT(*) AS n FROM messages GROUP BY channel ORDER BY channel"
@@ -355,16 +378,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 # ── HTTP / JSON API ──────────────────────────────────────────────────────────
 
 async def http_status(request: Request) -> JSONResponse:
-    rows = db().execute(
-        "SELECT channel, COUNT(*) AS n FROM messages GROUP BY channel"
-    ).fetchall()
+    # Public endpoint — keep payload to the bare healthcheck signal.
+    # Prior versions returned the absolute db_path and the full channel map
+    # here; both were useful recon for an unauthenticated probe.
     return JSONResponse({
         "service": "claude-bridge",
         "status": "online",
         "version": VERSION,
-        "db_path": DB_PATH,
-        "channels": {r["channel"]: r["n"] for r in rows},
-        "total_messages": sum(r["n"] for r in rows),
         "server_time": utc_now_iso(),
     })
 
@@ -489,6 +509,11 @@ async def api_send(request: Request) -> JSONResponse:
     for key in ("channel", "sender", "content"):
         if not isinstance(body.get(key), str) or not body[key]:
             return JSONResponse({"error": f"missing or empty: {key}"}, status_code=400)
+    if len(body["content"].encode("utf-8")) > MAX_MESSAGE_BYTES:
+        return JSONResponse(
+            {"error": f"content exceeds {MAX_MESSAGE_BYTES} bytes"},
+            status_code=413,
+        )
     msg_id, seq, ts = await insert_message(body["channel"], body["sender"], body["content"])
     return JSONResponse({"id": msg_id, "seq": seq, "channel": body["channel"], "ts": ts})
 
@@ -568,17 +593,27 @@ if os.path.isdir(WEB_DIR) and not os.environ.get("CLAUDE_BRIDGE_NO_DASHBOARD"):
     # html=True makes "/" serve index.html.
     _routes.append(Mount("/", app=StaticFiles(directory=WEB_DIR, html=True)))
 
+_cors_kwargs: dict[str, object] = {
+    "allow_methods": ["GET", "POST", "OPTIONS"],
+    "allow_headers": ["Authorization", "Content-Type"],
+}
+if CORS_EXTRA_ORIGINS:
+    _cors_kwargs["allow_origins"] = CORS_EXTRA_ORIGINS
+else:
+    # Default: localhost/127.0.0.1/::1 on any port. Browsers will not send
+    # cross-origin requests from any other origin without the user having
+    # explicitly configured one via CLAUDE_BRIDGE_CORS_ORIGIN.
+    _cors_kwargs["allow_origin_regex"] = CORS_LOCALHOST_REGEX
+
 app = Starlette(
     routes=_routes,
     middleware=[
         # CORS first (outermost) so OPTIONS preflight doesn't get blocked by
         # the auth check before browsers can complete the handshake.
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        ),
+        Middleware(CORSMiddleware, **_cors_kwargs),
+        # Reject obviously oversized POSTs at the Content-Length header before
+        # reading any body.
+        Middleware(RequestSizeLimitMiddleware, max_bytes=MAX_REQUEST_BYTES),
         # Bearer-token auth — no-op when AUTH_TOKEN is None (opt-in).
         # token_getter reads at request time so monkeypatch and runtime
         # rotation both work without rebuilding the app.

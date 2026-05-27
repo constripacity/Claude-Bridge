@@ -99,17 +99,99 @@ def test_dashboard_root_is_public_even_with_auth(client, auth_on):
 
 def test_malformed_authorization_header(client, auth_on):
     """Headers that aren't 'Bearer <token>' shape should 401, not crash."""
-    for bad in ("", f"{TOKEN}", f"Token {TOKEN}", f"Bearer  {TOKEN}", "Bearer"):
+    for bad in ("", f"{TOKEN}", f"Token {TOKEN}", f"Bearer  {TOKEN}", "Bearer", "Bearer "):
         r = client.get("/api/state", headers={"Authorization": bad})
         assert r.status_code == 401, bad
+
+
+def test_bearer_scheme_case_insensitive(client, auth_on):
+    """RFC 7235: auth-scheme is case-insensitive. `bearer` and `BEARER` must
+    accept the token; only the credential half is byte-compared."""
+    for scheme in ("bearer", "Bearer", "BEARER", "BeArEr"):
+        r = client.get("/api/state", headers={"Authorization": f"{scheme} {TOKEN}"})
+        assert r.status_code == 200, scheme
 
 
 def test_constant_time_compare_used():
     """The middleware should use hmac.compare_digest, not ==.
 
-    Indirect check: a one-char-different token must still 401, and the type
-    used is hmac.compare_digest (smoke-test for timing-attack hygiene)."""
+    Indirect check: source file references compare_digest (smoke-test for
+    timing-attack hygiene)."""
     from claude_bridge import auth as auth_mod
     src = auth_mod.__file__
     with open(src, encoding="utf-8") as f:
         assert "hmac.compare_digest" in f.read()
+
+
+# ── /sse and /messages/ are protected ──────────────────────────────────────
+
+def test_sse_requires_token(client, auth_on):
+    """GET /sse must reject unauthenticated requests when auth is on.
+
+    We only assert the rejection path here — the happy path opens a long-
+    lived stream that TestClient (sync) can't easily tear down. The
+    successful-auth case is covered by the empirical claude-mcp-add
+    verification documented in the v0.7.0 release notes."""
+    assert client.get("/sse").status_code == 401
+
+
+def test_messages_post_requires_token(client, auth_on):
+    """POST /messages/<session> must reject unauthenticated requests."""
+    assert client.post("/messages/?session_id=x", json={}).status_code == 401
+
+
+# ── Request size limit ──────────────────────────────────────────────────────
+
+def test_oversized_post_rejected_before_handler(client):
+    """Content-Length above MAX_REQUEST_BYTES is rejected with 413."""
+    huge_content = "x" * (bridge.MAX_REQUEST_BYTES + 1024)
+    r = client.post("/api/send", json={
+        "channel": "c", "sender": "a", "content": huge_content,
+    })
+    assert r.status_code == 413
+    assert "too large" in r.json()["error"]
+
+
+def test_oversized_content_rejected_after_decode(client):
+    """A small JSON wrapper with a long content field still trips the
+    per-message cap inside the handler."""
+    # Just over MAX_MESSAGE_BYTES, but well under MAX_REQUEST_BYTES so the
+    # middleware doesn't catch it. Confirms the defense-in-depth handler check.
+    content = "x" * (bridge.MAX_MESSAGE_BYTES + 1)
+    r = client.post("/api/send", json={
+        "channel": "c", "sender": "a", "content": content,
+    })
+    assert r.status_code == 413
+    assert "exceeds" in r.json()["error"]
+
+
+def test_normal_send_unaffected(client):
+    """Reasonable message size still works."""
+    r = client.post("/api/send", json={
+        "channel": "c", "sender": "a", "content": "hello"
+    })
+    assert r.status_code == 200
+
+
+# ── CORS: localhost-only by default ────────────────────────────────────────
+
+def test_cors_default_allows_localhost(client):
+    """Default CORS config accepts requests claiming a localhost origin."""
+    r = client.options("/api/state", headers={
+        "Origin": "http://localhost:3000",
+        "Access-Control-Request-Method": "GET",
+    })
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+
+def test_cors_default_rejects_external_origin(client):
+    """A drive-by site origin is NOT echoed back, so the browser blocks it."""
+    r = client.options("/api/state", headers={
+        "Origin": "https://evil.example.com",
+        "Access-Control-Request-Method": "GET",
+    })
+    # Either no allow-origin header at all, or one that doesn't match evil.*.
+    # In neither case can the browser read the response.
+    allowed = r.headers.get("access-control-allow-origin")
+    assert allowed != "https://evil.example.com"
+    assert allowed != "*"

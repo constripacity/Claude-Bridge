@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Claude Bridge — Terminal UI Design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #0a0b0e; color: #e6edf3; }
+  body { font-family: 'Geist', -apple-system, system-ui, sans-serif; }
+  .nav { position: sticky; top: 0; background: #0a0b0eee; backdrop-filter: blur(8px);
+         padding: 12px 24px; border-bottom: 1px solid #21262d; display: flex; gap: 16px;
+         font-family: 'IBM Plex Mono', monospace; font-size: 12px; z-index: 10; }
+  .nav a { color: #58a6ff; text-decoration: none; }
+  .nav a:hover { color: #7dd3fc; }
+  .section { padding: 24px; border-bottom: 1px solid #21262d; }
+  .section h2 { margin: 0 0 4px; font-size: 14px; font-family: 'IBM Plex Mono', monospace; }
+  .section .sub { color: #8b949e; font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+                  margin-bottom: 16px; }
+  .artboard { display: inline-block; margin: 8px 16px 16px 0; vertical-align: top; }
+  .artboard-label { color: #8b949e; font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+                    padding-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="tui-core.jsx"></script>
+<script type="text/babel" src="tui-full.jsx"></script>
+<script type="text/babel" src="tui-variants.jsx"></script>
+<script type="text/babel" src="tui-states.jsx"></script>
+<script type="text/babel" src="tui-startup.jsx"></script>
+<script type="text/babel" src="tui-components.jsx"></script>
+
+<script type="text/babel">
+function Artboard({ label, children }) {
+  return (
+    <div className="artboard">
+      <div className="artboard-label">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <>
+      <nav className="nav">
+        <strong style={{ color: '#e6edf3' }}>Claude Bridge — TUI</strong>
+        <a href="#full">full</a>
+        <a href="#compact">compact</a>
+        <a href="#narrow">narrow</a>
+        <a href="#states">states</a>
+        <a href="#startup">startup</a>
+        <a href="#components">components</a>
+      </nav>
+      <div className="section" id="full">
+        <h2>TUI · Full layout</h2>
+        <div className="sub">220 cols × 50 rows — desktop terminal, centerpiece</div>
+        <Artboard label="220 × 50"><TUIFull /></Artboard>
+      </div>
+      <div className="section" id="compact">
+        <h2>TUI · Compact</h2>
+        <div className="sub">120 cols × 35 rows — 13″ laptop terminal</div>
+        <Artboard label="120 × 35"><TUICompact /></Artboard>
+      </div>
+      <div className="section" id="narrow">
+        <h2>TUI · Narrow</h2>
+        <div className="sub">80 cols × 24 rows — tmux pane fallback</div>
+        <Artboard label="80 × 24"><TUINarrow /></Artboard>
+      </div>
+      <div className="section" id="states">
+        <h2>TUI · State variants</h2>
+        <div className="sub">filter mode, send mode, offline, error</div>
+        <Artboard label="states"><TUIStates /></Artboard>
+      </div>
+      <div className="section" id="startup">
+        <h2>TUI · Startup sequence</h2>
+        <div className="sub">4 frames — boot to interactive</div>
+        <Artboard label="startup"><TUIStartup /></Artboard>
+      </div>
+      <div className="section" id="components">
+        <h2>TUI · Component sheet</h2>
+        <div className="sub">re-usable parts called out individually</div>
+        <Artboard label="components"><TUIComponents /></Artboard>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

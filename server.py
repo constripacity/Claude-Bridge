@@ -22,6 +22,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
+import anyio
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
@@ -29,7 +30,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount, Route
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.requests import Request
 import uvicorn
@@ -514,6 +515,20 @@ async def handle_sse(request: Request):
         await server.run(
             streams[0], streams[1], server.create_initialization_options()
         )
+    # SSE bytes were already streamed via request._send inside connect_sse;
+    # this empty Response just satisfies Starlette's response-object contract.
+    return Response()
+
+
+# Wrap the SDK's POST handler so a closed-session push — client disconnected
+# between our 202 ACK and the SDK trying to forward the JSON-RPC response back
+# over SSE — doesn't surface as a noisy ASGI traceback. The client already has
+# the 202; their MCP SDK reconnects on its own.
+async def handle_post_message(scope, receive, send):
+    try:
+        await sse_transport.handle_post_message(scope, receive, send)
+    except (anyio.ClosedResourceError, anyio.BrokenResourceError):
+        pass
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -526,7 +541,7 @@ _routes = [
     Route("/api/send", endpoint=api_send, methods=["POST"]),
     Route("/api/clear", endpoint=api_clear, methods=["POST"]),
     Route("/sse", endpoint=handle_sse),
-    Mount("/messages/", app=sse_transport.handle_post_message),
+    Mount("/messages/", app=handle_post_message),
 ]
 if os.path.isdir(WEB_DIR):
     # Catch-all static mount goes LAST so it doesn't shadow API routes.

@@ -504,7 +504,7 @@ async def api_clear(request: Request) -> JSONResponse:
 
 # ── SSE Transport ─────────────────────────────────────────────────────────────
 
-sse_transport = SseServerTransport("/messages")
+sse_transport = SseServerTransport("/messages/")
 
 
 async def handle_sse(request: Request):
@@ -514,12 +514,6 @@ async def handle_sse(request: Request):
         await server.run(
             streams[0], streams[1], server.create_initialization_options()
         )
-
-
-async def handle_messages(request: Request):
-    await sse_transport.handle_post_message(
-        request.scope, request.receive, request._send
-    )
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -532,7 +526,7 @@ _routes = [
     Route("/api/send", endpoint=api_send, methods=["POST"]),
     Route("/api/clear", endpoint=api_clear, methods=["POST"]),
     Route("/sse", endpoint=handle_sse),
-    Mount("/messages", app=handle_messages),
+    Mount("/messages/", app=sse_transport.handle_post_message),
 ]
 if os.path.isdir(WEB_DIR):
     # Catch-all static mount goes LAST so it doesn't shadow API routes.

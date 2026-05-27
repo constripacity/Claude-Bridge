@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "claude-bridge"
+name = "claude-code-bridge"
 description = "Real-time cross-machine MCP relay for Claude Code agents — send and receive messages across named channels."
 readme = "README.md"
 license = { file = "LICENSE" }

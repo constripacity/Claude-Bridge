@@ -34,9 +34,11 @@ One agent sends. The other receives. No polling hacks, no shared filesystems, no
 ### 1. Install (on the machine that will host the server)
 
 ```bash
-pip install claude-bridge          # server + web dashboard
-pip install claude-bridge[tui]     # also brings the terminal UI
+pip install claude-code-bridge          # server + web dashboard
+pip install claude-code-bridge[tui]     # also brings the terminal UI
 ```
+
+> **Why the PyPI name differs from the project name:** `claude-bridge` was already taken on PyPI by an unrelated project. The distribution name is `claude-code-bridge`; the import name (`import claude_bridge`) and the CLI command (`claude-bridge`) are unchanged.
 
 Or from a clone if you'd like to hack on it:
 ```bash

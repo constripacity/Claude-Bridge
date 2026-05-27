@@ -25,7 +25,7 @@ One agent sends. The other receives. No polling hacks, no shared filesystems, no
 
 ## Architecture
 
-![Architecture](docs/architecture.svg)
+![Architecture](docs/architecture-v2.png)
 
 ---
 

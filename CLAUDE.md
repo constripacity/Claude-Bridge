@@ -170,7 +170,7 @@ job is to:
 ## Error Handling
 
 If the bridge is unreachable:
-- Host: check that `server.py` is running (`python server.py`)
+- Host: check that the bridge is running (`claude-bridge` or `python -m claude_bridge`)
 - Remote: verify the host is reachable on the chosen network path (LAN, Tailscale, etc.) and use `bridge_ping` to test
 
 If a message is malformed or missing fields, send an error result:

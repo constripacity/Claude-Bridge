@@ -13,8 +13,9 @@ A clear description of what's wrong.
 - OS (server machine): 
 - OS (client machine): 
 - Python version: 
+- `claude-bridge --version`: 
 - MCP version: 
-- Connected via: [ ] Tailscale [ ] LAN [ ] localhost
+- Connected via: [ ] localhost [ ] LAN [ ] Tailscale / other VPN
 
 **To reproduce**
 Steps to reproduce the behavior.
@@ -23,4 +24,4 @@ Steps to reproduce the behavior.
 What you expected to happen.
 
 **Logs**
-Paste any relevant output from `python server.py` or Claude Code.
+Paste any relevant output from `claude-bridge` (the server) or Claude Code.

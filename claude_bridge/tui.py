@@ -1,13 +1,13 @@
 """Claude Bridge — Terminal UI.
 
 A Textual-based command-line companion to the web dashboard. Connects to the
-same HTTP API exposed by server.py (defaults to http://localhost:8765) and
+same HTTP API exposed by the bridge (defaults to http://localhost:8765) and
 provides a live view of channels, messages, an inspector, and a send composer.
 
 Usage:
-    python tui.py                     # connect to localhost:8765 as "windows" (or platform)
-    python tui.py --url http://...    # connect to a remote bridge
-    python tui.py --sender mac        # override sender id used in send composer
+    python -m claude_bridge.tui                     # connect to localhost:8765 (sender id auto-detected from platform)
+    python -m claude_bridge.tui --url http://...    # connect to a remote bridge
+    python -m claude_bridge.tui --sender mac        # override sender id used in send composer
 
 Design reference: docs/design/terminal/  (React/JSX mockups of every layout).
 """

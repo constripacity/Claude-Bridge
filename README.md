@@ -34,23 +34,34 @@ One agent sends. The other receives. No polling hacks, no shared filesystems, no
 ### 1. Install (on the machine that will host the server)
 
 ```bash
-git clone https://github.com/constripacity/claude-bridge.git
-cd claude-bridge
-pip install -r requirements.txt
+pip install claude-bridge          # server + web dashboard
+pip install claude-bridge[tui]     # also brings the terminal UI
+```
+
+Or from a clone if you'd like to hack on it:
+```bash
+git clone https://github.com/constripacity/Claude-Bridge.git
+cd Claude-Bridge
+pip install -e .[dev]              # editable install with test/lint deps
 ```
 
 ### 2. Start the server
 
 ```bash
-python server.py
+claude-bridge                       # defaults: 0.0.0.0:8765, ./claude-bridge.db
+# or pick a custom port / db path:
+claude-bridge --port 9000 --db /var/lib/claude-bridge/bridge.db
+# or disable the web dashboard if you only want the MCP transport:
+claude-bridge --no-dashboard
 ```
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Claude Bridge — General MCP Relay Server
+  Version: 0.6.0
   http://localhost:8765/             ← Dashboard
   http://localhost:8765/sse          ← Local MCP config
-  http://<tailscale-ip>:8765/sse     ← Remote machines
+  http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)
   http://localhost:8765/api/state    ← JSON state for dashboard
   http://localhost:8765/status       ← Health check
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -184,11 +195,12 @@ Sends from the dashboard are indistinguishable from MCP `bridge_send` calls — 
 
 ## Terminal UI
 
-If you live in a terminal, run the TUI companion instead of (or alongside) the web dashboard:
+If you live in a terminal, run the TUI companion instead of (or alongside) the web dashboard. Install the `[tui]` extra and use the module entry point:
 
 ```bash
-python tui.py
-# or:  python tui.py --url http://<host>:8765 --sender mac
+pip install claude-bridge[tui]
+python -m claude_bridge.tui
+# or:  python -m claude_bridge.tui --url http://<host>:8765 --sender mac
 ```
 
 It's a [Textual](https://textual.textualize.io) app that talks to the same JSON API as the dashboard, so they're always in sync. Channels in a sidebar, live-polled feed with sender/type colouring, a JSON-highlighted inspector, send composer, filter, clear, and pause — all keyboard-driven (`?` for help, `q` to quit).
@@ -202,7 +214,8 @@ Design reference for every layout (full / compact / narrow / states) lives in `d
 Messages are persisted to a local SQLite database (`./claude-bridge.db` by default) so they survive server restarts. Override the path with the `CLAUDE_BRIDGE_DB` environment variable:
 
 ```bash
-CLAUDE_BRIDGE_DB=/var/lib/claude-bridge/bridge.db python server.py
+CLAUDE_BRIDGE_DB=/var/lib/claude-bridge/bridge.db claude-bridge
+# or:  claude-bridge --db /var/lib/claude-bridge/bridge.db
 ```
 
 The schema is a single `messages` table — easy to inspect with `sqlite3`. Use `bridge_clear` to drop a channel.
@@ -213,18 +226,18 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 
 - [x] Optional SQLite persistence (survive server restarts)
 - [x] Web dashboard (live channel monitor in the browser)
+- [x] `claude-bridge` PyPI package + CLI entrypoint
 - [ ] Auth token support (shared secret per channel or global)
-- [ ] WebSocket transport (alternative to SSE)
-- [ ] `claude-bridge` PyPI package + CLI entrypoint
 - [ ] stdio transport (for pure local use without HTTP)
 - [ ] Submit to [MCP server directory](https://github.com/modelcontextprotocol/servers)
+- [ ] WebSocket transport (alternative to SSE) — *deferred unless requested*
 
 ---
 
 ## Requirements
 
 - Python 3.10+
-- `mcp`, `starlette`, `uvicorn` (see `requirements.txt`)
+- `mcp`, `starlette`, `uvicorn`, `anyio` (declared in `pyproject.toml`; installed automatically by `pip install claude-bridge`)
 - A reachable network path between machines — `localhost`, LAN, Tailscale, or any other route (see [Networking](#networking))
 
 ---

@@ -1,6 +1,6 @@
 """Async HTTP client for the Claude Bridge JSON API.
 
-Used by tui.py. Wraps the five endpoints exposed by server.py:
+Used by claude_bridge.tui. Wraps the five endpoints exposed by the bridge:
     GET  /api/state
     GET  /api/messages?channel=X[&since_id=Y][&limit=N]
     GET  /api/messages/{id}

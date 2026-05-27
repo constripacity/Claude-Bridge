@@ -15,6 +15,7 @@ Remote machines connect: <host-tailscale-ip>:8765
 """
 
 import os
+import json
 import uuid
 import sqlite3
 import asyncio
@@ -29,8 +30,14 @@ from starlette.routing import Mount, Route
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
+from starlette.staticfiles import StaticFiles
 from starlette.requests import Request
 import uvicorn
+
+
+VERSION = "0.4.0"
+SERVER_STARTED_AT = datetime.now(timezone.utc)
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -64,6 +71,46 @@ def db() -> sqlite3.Connection:
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def uptime_seconds() -> int:
+    return int((datetime.now(timezone.utc) - SERVER_STARTED_AT).total_seconds())
+
+
+def format_uptime(s: int) -> str:
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{sec:02d}"
+
+
+def _is_json_str(s: str) -> bool:
+    s = s.strip()
+    if not s or s[0] not in "{[":
+        return False
+    try:
+        json.loads(s)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+async def insert_message(channel: str, sender: str, content: str) -> tuple[str, int, str]:
+    """Append a message to a channel. Returns (id, seq, timestamp)."""
+    msg_id = str(uuid.uuid4())
+    ts = utc_now_iso()
+    async with _write_lock:
+        cur = db().execute(
+            "INSERT INTO messages (id, channel, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (msg_id, channel, sender, content, ts),
+        )
+        seq = cur.lastrowid
+    return msg_id, seq, ts
+
+
+async def clear_channel(channel: str) -> int:
+    async with _write_lock:
+        cur = db().execute("DELETE FROM messages WHERE channel = ?", (channel,))
+        return cur.rowcount
 
 
 # ── MCP Server ────────────────────────────────────────────────────────────────
@@ -183,14 +230,9 @@ async def dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextConten
 
     # ── bridge_send ──────────────────────────────────────────────────────────
     if name == "bridge_send":
-        msg_id = str(uuid.uuid4())
-        ts = utc_now_iso()
-        async with _write_lock:
-            cur = db().execute(
-                "INSERT INTO messages (id, channel, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (msg_id, arguments["channel"], arguments["sender"], arguments["content"], ts),
-            )
-            seq = cur.lastrowid
+        msg_id, seq, ts = await insert_message(
+            arguments["channel"], arguments["sender"], arguments["content"]
+        )
         result = (
             f"✓ Sent to [{arguments['channel']}]\n"
             f"  id: {msg_id}\n"
@@ -265,9 +307,7 @@ async def dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextConten
     # ── bridge_clear ─────────────────────────────────────────────────────────
     elif name == "bridge_clear":
         channel = arguments["channel"]
-        async with _write_lock:
-            cur = db().execute("DELETE FROM messages WHERE channel = ?", (channel,))
-            count = cur.rowcount
+        count = await clear_channel(channel)
         return [TextContent(type="text", text=f"Cleared {count} message(s) from [{channel}]")]
 
     # ── bridge_status ────────────────────────────────────────────────────────
@@ -309,7 +349,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     return await dispatch_tool(name, arguments)
 
 
-# ── HTTP status endpoint (not MCP, just for humans) ──────────────────────────
+# ── HTTP / JSON API ──────────────────────────────────────────────────────────
 
 async def http_status(request: Request) -> JSONResponse:
     rows = db().execute(
@@ -318,11 +358,148 @@ async def http_status(request: Request) -> JSONResponse:
     return JSONResponse({
         "service": "claude-bridge",
         "status": "online",
+        "version": VERSION,
         "db_path": DB_PATH,
         "channels": {r["channel"]: r["n"] for r in rows},
         "total_messages": sum(r["n"] for r in rows),
         "server_time": utc_now_iso(),
     })
+
+
+async def api_state(request: Request) -> JSONResponse:
+    conn = db()
+    chan_rows = conn.execute(
+        "SELECT channel, COUNT(*) AS n, MAX(timestamp) AS last_ts "
+        "FROM messages GROUP BY channel ORDER BY channel"
+    ).fetchall()
+    channels = []
+    for r in chan_rows:
+        ch = r["channel"]
+        group, _, name = ch.partition(":")
+        if not name:
+            group, name = "", ch
+        senders = [
+            s["sender"] for s in conn.execute(
+                "SELECT DISTINCT sender FROM messages WHERE channel = ? ORDER BY sender",
+                (ch,),
+            ).fetchall()
+        ]
+        channels.append({
+            "id": ch,
+            "group": group,
+            "name": name,
+            "count": r["n"],
+            "last_ts": r["last_ts"][11:19] if r["last_ts"] else "",
+            "last_ts_full": r["last_ts"],
+            "senders": senders,
+        })
+    up = uptime_seconds()
+    return JSONResponse({
+        "service": "claude-bridge",
+        "status": "online",
+        "version": VERSION,
+        "uptime_seconds": up,
+        "uptime_human": format_uptime(up),
+        "total_messages": sum(c["count"] for c in channels),
+        "channels": channels,
+        "server_time": utc_now_iso(),
+    })
+
+
+async def api_messages(request: Request) -> JSONResponse:
+    channel = request.query_params.get("channel")
+    if not channel:
+        return JSONResponse({"error": "channel parameter required"}, status_code=400)
+    since_id = request.query_params.get("since_id")
+    try:
+        limit = int(request.query_params.get("limit", 50))
+    except ValueError:
+        limit = 50
+    limit = max(1, min(limit, 500))
+
+    conn = db()
+    if since_id:
+        row = conn.execute("SELECT seq FROM messages WHERE id = ?", (since_id,)).fetchone()
+        since_seq = row["seq"] if row else 0
+        rows = conn.execute(
+            "SELECT seq, id, sender, content, timestamp FROM messages "
+            "WHERE channel = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
+            (channel, since_seq, limit),
+        ).fetchall()
+    else:
+        rows = list(reversed(conn.execute(
+            "SELECT seq, id, sender, content, timestamp FROM messages "
+            "WHERE channel = ? ORDER BY seq DESC LIMIT ?",
+            (channel, limit),
+        ).fetchall()))
+
+    messages = []
+    for r in rows:
+        content = r["content"]
+        preview = content if len(content) <= 200 else content[:200] + "…"
+        messages.append({
+            "seq": r["seq"],
+            "id": r["id"],
+            "ts": r["timestamp"][11:19] if r["timestamp"] else "",
+            "ts_full": r["timestamp"],
+            "sender": r["sender"],
+            "is_json": _is_json_str(content),
+            "preview": preview,
+        })
+    return JSONResponse({"channel": channel, "messages": messages})
+
+
+async def api_message_detail(request: Request) -> JSONResponse:
+    msg_id = request.path_params["msg_id"]
+    row = db().execute(
+        "SELECT seq, id, channel, sender, content, timestamp FROM messages WHERE id = ?",
+        (msg_id,),
+    ).fetchone()
+    if not row:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    content = row["content"]
+    is_json = _is_json_str(content)
+    parsed = None
+    if is_json:
+        try:
+            parsed = json.loads(content)
+        except (ValueError, TypeError):
+            parsed = None
+    return JSONResponse({
+        "seq": row["seq"],
+        "id": row["id"],
+        "channel": row["channel"],
+        "sender": row["sender"],
+        "ts": row["timestamp"],
+        "is_json": is_json,
+        "content": content,
+        "content_parsed": parsed,
+        "bytes": len(content.encode("utf-8")),
+    })
+
+
+async def api_send(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    for key in ("channel", "sender", "content"):
+        if not isinstance(body.get(key), str) or not body[key]:
+            return JSONResponse({"error": f"missing or empty: {key}"}, status_code=400)
+    msg_id, seq, ts = await insert_message(body["channel"], body["sender"], body["content"])
+    return JSONResponse({"id": msg_id, "seq": seq, "channel": body["channel"], "ts": ts})
+
+
+async def api_clear(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    channel = body.get("channel")
+    if not isinstance(channel, str) or not channel:
+        return JSONResponse({"error": "missing or empty: channel"}, status_code=400)
+    count = await clear_channel(channel)
+    return JSONResponse({"channel": channel, "cleared": count})
 
 
 # ── SSE Transport ─────────────────────────────────────────────────────────────
@@ -347,12 +524,23 @@ async def handle_messages(request: Request):
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
+_routes = [
+    Route("/status", endpoint=http_status),
+    Route("/api/state", endpoint=api_state),
+    Route("/api/messages", endpoint=api_messages),
+    Route("/api/messages/{msg_id}", endpoint=api_message_detail),
+    Route("/api/send", endpoint=api_send, methods=["POST"]),
+    Route("/api/clear", endpoint=api_clear, methods=["POST"]),
+    Route("/sse", endpoint=handle_sse),
+    Mount("/messages", app=handle_messages),
+]
+if os.path.isdir(WEB_DIR):
+    # Catch-all static mount goes LAST so it doesn't shadow API routes.
+    # html=True makes "/" serve index.html.
+    _routes.append(Mount("/", app=StaticFiles(directory=WEB_DIR, html=True)))
+
 app = Starlette(
-    routes=[
-        Route("/sse", endpoint=handle_sse),
-        Route("/status", endpoint=http_status),
-        Mount("/messages", app=handle_messages),
-    ],
+    routes=_routes,
     middleware=[
         Middleware(
             CORSMiddleware,
@@ -360,17 +548,24 @@ app = Starlette(
             allow_methods=["*"],
             allow_headers=["*"],
         )
-    ]
+    ],
 )
 
 
 if __name__ == "__main__":
+    import sys
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError):
+        pass
     db()  # initialize DB before serving
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("  Claude Bridge — General MCP Relay Server")
     print(f"  DB: {os.path.abspath(DB_PATH)}")
-    print("  http://localhost:8765/sse        ← Local MCP config")
-    print("  http://<tailscale-ip>:8765/sse   ← Remote machines")
-    print("  http://localhost:8765/status     ← Health check")
+    print("  http://localhost:8765/             ← Dashboard")
+    print("  http://localhost:8765/sse          ← Local MCP config")
+    print("  http://<tailscale-ip>:8765/sse     ← Remote machines")
+    print("  http://localhost:8765/api/state    ← JSON state for dashboard")
+    print("  http://localhost:8765/status       ← Health check")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     uvicorn.run(app, host="0.0.0.0", port=8765)

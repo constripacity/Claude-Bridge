@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Claude Bridge — Design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #0d1117; }
+  body { font-family: 'Geist', -apple-system, system-ui, sans-serif; }
+  /* Shared dashboard tokens so every artboard speaks the same language */
+  :root {
+    --bg-base:   #0d1117;
+    --bg-card:   #161b22;
+    --bg-elev:   #1c2333;
+    --bg-deep:   #08090d;
+    --hairline:  #21262d;
+    --hairline-strong: #30363d;
+    --blue:      #58a6ff;
+    --blue-dim:  #1f4d8a;
+    --green:     #3fb950;
+    --green-dim: #1a5928;
+    --amber:     #d97706;
+    --amber-dim: #5a3009;
+    --red:       #f85149;
+    --magenta:   #bc8cff;
+    --text:      #e6edf3;
+    --text-mid:  #8b949e;
+    --text-dim:  #6e7681;
+    --text-faint:#484f58;
+    --mono: 'IBM Plex Mono', 'Geist Mono', ui-monospace, Menlo, monospace;
+    --sans: 'Geist', -apple-system, system-ui, sans-serif;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="shared.jsx"></script>
+<script type="text/babel" src="dashboard-desktop.jsx"></script>
+<script type="text/babel" src="dashboard-mobile.jsx"></script>
+<script type="text/babel" src="landing-hero.jsx"></script>
+<script type="text/babel" src="tokens-sheet.jsx"></script>
+<script type="text/babel" src="logo-sheet.jsx"></script>
+
+<script type="text/babel">
+function App() {
+  return (
+    <DesignCanvas>
+      <DCSection id="dashboard" title="Web Dashboard" subtitle="Live monitoring UI — served at http://localhost:8765">
+        <DCArtboard id="desktop" label="Desktop · 1280 × 800" width={1280} height={800}>
+          <DashboardDesktop />
+        </DCArtboard>
+        <DCArtboard id="mobile" label="Mobile · 390 × 844" width={390} height={844}>
+          <DashboardMobile />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="landing" title="Landing / README Hero" subtitle="github.com/constripacity/claude-bridge">
+        <DCArtboard id="hero" label="Hero + What Is It · 1440 × 1100" width={1440} height={1100}>
+          <LandingHero />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="system" title="Design System" subtitle="Tokens, type, components, marks">
+        <DCArtboard id="tokens" label="Tokens & Components · 1200 × 1700" width={1200} height={1700}>
+          <TokensSheet />
+        </DCArtboard>
+        <DCArtboard id="logo" label="Logo & Wordmark · 1200 × 900" width={1200} height={900}>
+          <LogoSheet />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

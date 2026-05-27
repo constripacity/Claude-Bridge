@@ -48,9 +48,11 @@ python server.py
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Claude Bridge — General MCP Relay Server
-  http://localhost:8765/sse        ← local MCP config
-  http://<tailscale-ip>:8765/sse   ← remote machines
-  http://localhost:8765/status     ← health check
+  http://localhost:8765/             ← Dashboard
+  http://localhost:8765/sse          ← Local MCP config
+  http://<tailscale-ip>:8765/sse     ← Remote machines
+  http://localhost:8765/api/state    ← JSON state for dashboard
+  http://localhost:8765/status       ← Health check
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -172,6 +174,24 @@ A ready-to-use `CLAUDE.md` is included. Drop it in your project root or add it t
 
 ---
 
+## Web Dashboard
+
+Open `http://localhost:8765/` in any browser for a live monitor of channels, messages, and senders. It polls `/api/state` + `/api/messages` every 2 seconds, lets you click into any message for a JSON-highlighted inspector, and includes a working send composer (pick a sender, type or paste JSON, ⌘↵ / Ctrl↵ to send) and a per-channel clear button. Adapts to mobile viewports automatically.
+
+The dashboard speaks a small JSON API alongside the MCP `/sse` transport:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/state` | All channels + counts + senders + uptime in one call |
+| `GET /api/messages?channel=X[&since_id=Y][&limit=N]` | Feed for one channel |
+| `GET /api/messages/{id}` | Full message detail (parsed JSON, byte size) |
+| `POST /api/send` `{channel,sender,content}` | Same effect as `bridge_send` |
+| `POST /api/clear` `{channel}` | Drop all messages on a channel |
+
+Sends from the dashboard are indistinguishable from MCP `bridge_send` calls — they share the same INSERT path.
+
+---
+
 ## Persistence
 
 Messages are persisted to a local SQLite database (`./claude-bridge.db` by default) so they survive server restarts. Override the path with the `CLAUDE_BRIDGE_DB` environment variable:
@@ -187,9 +207,9 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 ## Roadmap
 
 - [x] Optional SQLite persistence (survive server restarts)
+- [x] Web dashboard (live channel monitor in the browser)
 - [ ] Auth token support (shared secret per channel or global)
 - [ ] WebSocket transport (alternative to SSE)
-- [ ] Web dashboard (live channel monitor in the browser)
 - [ ] `claude-bridge` PyPI package + CLI entrypoint
 - [ ] stdio transport (for pure local use without HTTP)
 - [ ] Submit to [MCP server directory](https://github.com/modelcontextprotocol/servers)

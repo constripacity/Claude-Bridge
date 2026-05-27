@@ -277,7 +277,7 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 - [x] `claude-bridge` PyPI package + CLI entrypoint
 - [x] stdio transport (for pure local use without HTTP)
 - [x] Auth token support (Bearer token on every HTTP endpoint, opt-in)
-- [ ] Submit to [MCP server directory](https://github.com/modelcontextprotocol/servers)
+- [x] Listed on the [MCP Server Registry](https://registry.modelcontextprotocol.io/) as `io.github.constripacity/claude-code-bridge`
 - [ ] WebSocket transport (alternative to SSE) — *deferred unless requested*
 
 ---

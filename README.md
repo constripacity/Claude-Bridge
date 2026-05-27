@@ -192,6 +192,21 @@ Sends from the dashboard are indistinguishable from MCP `bridge_send` calls — 
 
 ---
 
+## Terminal UI
+
+If you live in a terminal, run the TUI companion instead of (or alongside) the web dashboard:
+
+```bash
+python tui.py
+# or:  python tui.py --url http://<host>:8765 --sender mac
+```
+
+It's a [Textual](https://textual.textualize.io) app that talks to the same JSON API as the dashboard, so they're always in sync. Channels in a sidebar, live-polled feed with sender/type colouring, a JSON-highlighted inspector, send composer, filter, clear, and pause — all keyboard-driven (`?` for help, `q` to quit).
+
+Design reference for every layout (full / compact / narrow / states) lives in `docs/design/terminal/` — open `index.html` to browse the artboards.
+
+---
+
 ## Persistence
 
 Messages are persisted to a local SQLite database (`./claude-bridge.db` by default) so they survive server restarts. Override the path with the `CLAUDE_BRIDGE_DB` environment variable:

@@ -151,8 +151,8 @@
   <!-- Tailscale / Network label -->
   <text x="220" y="200" text-anchor="middle" fill="#58a6ff" font-size="8" opacity="0.8">send</text>
   <text x="220" y="248" text-anchor="middle" fill="#3fb950" font-size="8" opacity="0.8">receive</text>
-  <text x="640" y="200" text-anchor="middle" fill="#58a6ff" font-size="8" opacity="0.8">send</text>
-  <text x="640" y="248" text-anchor="middle" fill="#3fb950" font-size="8" opacity="0.8">receive</text>
+  <text x="780" y="200" text-anchor="middle" fill="#3fb950" font-size="8" opacity="0.8">receive</text>
+  <text x="780" y="248" text-anchor="middle" fill="#58a6ff" font-size="8" opacity="0.8">send</text>
 
   <!-- Tailscale badge -->
   <rect x="310" y="350" width="240" height="22" rx="4" fill="#0d1117" stroke="#30363d" stroke-width="1"/>

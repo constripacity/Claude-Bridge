@@ -12,7 +12,7 @@
 Claude Code's native [Agent Teams](https://code.claude.com/docs/en/agent-teams) coordinate multiple instances on the **same machine**. Claude Bridge fills the gap — it lets Claude Code agents on **different machines** communicate in real time over a shared MCP relay server.
 
 ```
-Shadow PC (Claude Code)          MacBook Air (Claude Code)
+Windows PC (Claude Code)         MacBook (Claude Code)
          |                                |
          |   SSE · Tailscale / LAN        |  ← server runs here
          +-------> Claude Bridge <--------+
@@ -105,8 +105,8 @@ Agents communicate over **named channels**. Convention: `<project>:<role>`.
 ```
 bridge_send(
   channel="myproject:orchestrator",
-  sender="shadow",
-  content='{"type":"task","phase":1,"action":"scan_artifacts"}'
+  sender="windows",
+  content='{"type":"task","phase":1,"action":"run_tests"}'
 )
 ```
 
@@ -118,7 +118,7 @@ bridge_receive(channel="myproject:orchestrator")
 bridge_send(
   channel="myproject:worker",
   sender="mac",
-  content='{"type":"result","phase":1,"status":"complete","count":14}'
+  content='{"type":"result","phase":1,"status":"complete","tests_run":61,"failures":0}'
 )
 ```
 

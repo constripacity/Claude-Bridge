@@ -8,15 +8,15 @@ your global `~/.claude/CLAUDE.md`.
 
 ## What is Claude Bridge
 
-Claude Bridge is a lightweight MCP relay server running on the MacBook Air M3
-at `localhost:8765` (Mac) or `<MAC_TAILSCALE_IP>:8765` (Shadow PC / remote).
+Claude Bridge is a lightweight MCP relay server running on one machine (the
+**host**) at `localhost:8765` locally, or `<HOST_TAILSCALE_IP>:8765` from any
+other machine on the same Tailscale network or LAN.
 
 It gives every Claude Code instance a set of tools to send and receive messages
 over named channels in real time. Channels are project-scoped and created on
 first write.
 
-This is the primary coordination layer for multi-machine work across all
-Constripacity projects.
+This is the primary coordination layer for multi-machine work.
 
 ---
 
@@ -24,9 +24,10 @@ Constripacity projects.
 
 At the start of every session, identify yourself before using the bridge:
 
-- **If running on Shadow PC:** your sender ID is `shadow`
-- **If running on MacBook Air:** your sender ID is `mac`
-- **If running on another machine:** use a short, descriptive ID, e.g. `vps-01`
+- **On Windows:** your sender ID is `windows`
+- **On macOS:** your sender ID is `mac`
+- **On Linux:** your sender ID is `linux`
+- **On another machine:** use a short, descriptive ID, e.g. `vps-01`, `watcher`
 
 Always include your sender ID in every `bridge_send` call. Never guess — check
 your machine if unsure.
@@ -54,8 +55,8 @@ All channels follow the pattern: `<project>:<role>`
 
 | Channel | Direction | Purpose |
 |---------|-----------|---------|
-| `<project>:orchestrator` | Shadow → Mac | Tasks, instructions, phase triggers |
-| `<project>:worker` | Mac → Shadow | Results, outputs, completion signals |
+| `<project>:orchestrator` | Orchestrator → Worker | Tasks, instructions, phase triggers |
+| `<project>:worker` | Worker → Orchestrator | Results, outputs, completion signals |
 | `<project>:events` | Both | Shared event log, milestones, errors |
 | `<project>:debug` | Both | Verbose output, diagnostics |
 
@@ -139,33 +140,38 @@ Run this at the start of every bridged Claude Code session:
 
 ## Role Definitions
 
-### Shadow PC — Orchestrator
+These are conventions, not constraints — pick whichever machine plays each role
+for your workflow.
 
-Shadow holds the memory, Obsidian vault, and project context. Its job is to:
+### Orchestrator
 
-- Break work into phases and send tasks to Mac via `<project>:orchestrator`
+The orchestrator holds the long-term project context (memory, notes, repo
+history). Its job is to:
+
+- Break work into phases and send tasks via `<project>:orchestrator`
 - Monitor `<project>:worker` for results
-- Update memory and Obsidian vault with completed outputs
+- Update memory and project notes with completed outputs
 - Make decisions about next steps based on worker results
-- Never do Mac-specific work (macOS APIs, platform forensics, etc.)
+- Never do platform-specific work that belongs on the worker
 
-### MacBook Air — Worker + Bridge Host
+### Worker + Bridge Host
 
-Mac runs the Bridge server and executes platform-specific tasks. Its job is to:
+The worker runs the Bridge server and executes platform-specific tasks. Its
+job is to:
 
 - Keep the bridge server running before any session starts
 - Poll `<project>:orchestrator` for incoming tasks
-- Execute the task (file ops, API calls, builds, scans, etc.)
+- Execute the task (file ops, API calls, builds, tests, etc.)
 - Send structured results back via `<project>:worker`
-- Never hold long-term memory — rely on Shadow for context
+- Never hold long-term memory — rely on the orchestrator for context
 
 ---
 
 ## Error Handling
 
 If the bridge is unreachable:
-- Mac: check that `server.py` is running (`python server.py`)
-- Shadow: verify Tailscale is connected and use `bridge_ping` to test
+- Host: check that `server.py` is running (`python server.py`)
+- Remote: verify Tailscale is connected and use `bridge_ping` to test
 
 If a message is malformed or missing fields, send an error result:
 ```json
@@ -174,7 +180,7 @@ If a message is malformed or missing fields, send an error result:
 
 If a task takes longer than expected, send a progress heartbeat every 30s:
 ```json
-{ "type": "heartbeat", "phase": 1, "progress": "scanning /Library, 2400 files so far" }
+{ "type": "heartbeat", "phase": 1, "progress": "ran 28 of 70 tests, 0 failures so far" }
 ```
 
 ---
@@ -185,16 +191,15 @@ Update this section as projects are onboarded:
 
 | Project | Channels | Orchestrator | Worker |
 |---------|----------|-------------|--------|
-| Pawprint | `pawprint:orchestrator`, `pawprint:worker`, `pawprint:events` | Shadow | Mac |
-| *(add new projects here)* | | | |
+| *(add your projects here)* | | | |
 
 ---
 
 ## Notes
 
 - Messages are persisted to SQLite (`./claude-bridge.db` by default) and survive
-  server restarts. Long-term project memory should still live in Obsidian and
-  git — the bridge is a transport, not an archive.
+  server restarts. Long-term project memory should still live in your notes /
+  repo — the bridge is a transport, not an archive.
 - Keep `bridge_status` calls cheap — use `since_id` on `bridge_receive` rather
   than re-reading full channel history on every poll.
 - The bridge is project-agnostic. This CLAUDE.md is the only place that gives

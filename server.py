@@ -4,15 +4,14 @@ Claude Code communication across machines and projects.
 
 Any number of Claude Code instances on any machine can connect to this server
 and exchange messages via named channels. Channels are project-scoped by
-convention: "<project>:<role>", e.g. "pawprint:orchestrator", "bookforge:mac".
+convention: "<project>:<role>", e.g. "demo:orchestrator", "myproject:worker".
 
 Messages are persisted to SQLite (default: ./claude-bridge.db, override with
 the CLAUDE_BRIDGE_DB environment variable) so they survive server restarts.
 
-Run on MacBook Air:  python server.py
-Mac connects:        localhost:8765
-Shadow connects:     <mac-tailscale-ip>:8765
-Any other machine:   <mac-tailscale-ip>:8765
+Run on the host machine: python server.py
+Host machine connects:   localhost:8765
+Remote machines connect: <host-tailscale-ip>:8765
 """
 
 import os
@@ -80,18 +79,18 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Send a message to a named channel on the Claude Bridge. "
                 "The other agent can read it with bridge_receive. "
-                "Use descriptive channel names like 'pawprint:orchestrator' or 'pawprint:mac'."
+                "Use descriptive channel names like 'demo:orchestrator' or 'demo:worker'."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "channel": {
                         "type": "string",
-                        "description": "Channel name, e.g. 'pawprint:orchestrator'"
+                        "description": "Channel name, e.g. 'demo:orchestrator'"
                     },
                     "sender": {
                         "type": "string",
-                        "description": "Your identity, e.g. 'shadow' or 'mac'"
+                        "description": "Your identity, e.g. 'windows' or 'mac'"
                     },
                     "content": {
                         "type": "string",
@@ -370,7 +369,7 @@ if __name__ == "__main__":
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("  Claude Bridge — General MCP Relay Server")
     print(f"  DB: {os.path.abspath(DB_PATH)}")
-    print("  http://localhost:8765/sse        ← Mac MCP config")
+    print("  http://localhost:8765/sse        ← Local MCP config")
     print("  http://<tailscale-ip>:8765/sse   ← Remote machines")
     print("  http://localhost:8765/status     ← Health check")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

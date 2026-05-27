@@ -39,12 +39,12 @@
   <text x="430" y="56" text-anchor="middle" fill="#8b949e" font-size="10" letter-spacing="2">CROSS-MACHINE MCP RELAY</text>
   <line x1="200" y1="66" x2="660" y2="66" stroke="#21262d" stroke-width="1"/>
 
-  <!-- Machine A — Shadow PC -->
+  <!-- Machine A — Windows PC -->
   <rect x="40" y="90" width="220" height="240" rx="8" fill="url(#boxA)" stroke="#30363d" stroke-width="1"/>
   <rect x="40" y="90" width="220" height="32" rx="8" fill="#1c2333"/>
   <rect x="40" y="106" width="220" height="16" fill="#1c2333"/>
   <text x="150" y="111" text-anchor="middle" fill="#8b949e" font-size="9" letter-spacing="2">MACHINE A</text>
-  <text x="150" y="127" text-anchor="middle" fill="#e6edf3" font-size="12" font-weight="700">Shadow PC</text>
+  <text x="150" y="127" text-anchor="middle" fill="#e6edf3" font-size="12" font-weight="700">Windows PC</text>
 
   <!-- Terminal block A -->
   <rect x="60" y="142" width="180" height="60" rx="4" fill="#010409" stroke="#21262d" stroke-width="1"/>
@@ -75,7 +75,7 @@
   <rect x="600" y="90" width="220" height="32" rx="8" fill="#1c2333"/>
   <rect x="600" y="106" width="220" height="16" fill="#1c2333"/>
   <text x="710" y="111" text-anchor="middle" fill="#8b949e" font-size="9" letter-spacing="2">MACHINE B</text>
-  <text x="710" y="127" text-anchor="middle" fill="#e6edf3" font-size="12" font-weight="700">MacBook Air M3</text>
+  <text x="710" y="127" text-anchor="middle" fill="#e6edf3" font-size="12" font-weight="700">MacBook</text>
 
   <!-- Terminal block B -->
   <rect x="620" y="142" width="180" height="60" rx="4" fill="#010409" stroke="#21262d" stroke-width="1"/>
@@ -138,9 +138,9 @@
   <rect x="310" y="294" width="240" height="26" rx="4" fill="#0a1628" stroke="#1d4ed8" stroke-width="1" opacity="0.8"/>
   <circle cx="326" cy="307" r="4" fill="#3fb950" filter="url(#glow)"/>
   <text x="336" y="311" fill="#3fb950" font-size="8">online</text>
-  <text x="430" y="311" text-anchor="middle" fill="#475569" font-size="8">in-memory  •  ~25MB  •  ~0% CPU</text>
+  <text x="430" y="311" text-anchor="middle" fill="#475569" font-size="8">SQLite + WAL  •  ~25MB  •  ~0% CPU</text>
 
-  <!-- Connection lines — Shadow to Bridge -->
+  <!-- Connection lines — Windows to Bridge -->
   <line x1="260" y1="185" x2="290" y2="207" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow)" opacity="0.7"/>
   <line x1="290" y1="230" x2="260" y2="235" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow2)" opacity="0.7"/>
 

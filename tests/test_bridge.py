@@ -36,13 +36,13 @@ async def test_ping_on_empty_db(fresh_db):
 async def test_send_then_receive(fresh_db):
     await bridge.dispatch_tool("bridge_send", {
         "channel": "proj:orchestrator",
-        "sender": "shadow",
+        "sender": "windows",
         "content": '{"type":"task","phase":1}',
     })
     out = text(await bridge.dispatch_tool("bridge_receive", {"channel": "proj:orchestrator"}))
     assert "proj:orchestrator" in out
     assert "1 message(s)" in out
-    assert "shadow" in out
+    assert "windows" in out
     assert '"type":"task"' in out
 
 
@@ -157,7 +157,7 @@ async def test_status_long_content_truncated(fresh_db):
 async def test_messages_persist_across_connection_reset(fresh_db, monkeypatch):
     """Simulate a server restart: close the connection, null it out, reopen."""
     await bridge.dispatch_tool("bridge_send", {
-        "channel": "persist:test", "sender": "shadow", "content": "survives restart",
+        "channel": "persist:test", "sender": "windows", "content": "survives restart",
     })
 
     bridge._conn.close()
@@ -165,7 +165,7 @@ async def test_messages_persist_across_connection_reset(fresh_db, monkeypatch):
 
     out = text(await bridge.dispatch_tool("bridge_receive", {"channel": "persist:test"}))
     assert "survives restart" in out
-    assert "shadow" in out
+    assert "windows" in out
 
 
 @pytest.mark.asyncio

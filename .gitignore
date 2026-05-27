@@ -14,6 +14,10 @@ Thumbs.db
 # Claude Code session state
 .claude/
 
+# UI/UX zip artifacts (extracted into _ui_extract/ during dev)
+Claude Bridge_UI_UX.zip
+_ui_extract/
+
 # Claude Bridge
 claude-bridge.db
 claude-bridge.db-journal

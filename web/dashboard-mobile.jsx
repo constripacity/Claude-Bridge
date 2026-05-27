@@ -1,7 +1,7 @@
 // Mobile dashboard — 390×844-ish. Live-data props version.
 // Same prop bag as DashboardDesktop.
 
-function MobileHeader({ state, channels, activeId, onSelect }) {
+function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
   return (
     <div style={{
       background: 'var(--bg-deep)',
@@ -62,6 +62,21 @@ function MobileHeader({ state, channels, activeId, onSelect }) {
             color: 'var(--text-faint)', padding: '4px 0',
           }}>No channels yet</span>
         )}
+        <button
+          onClick={() => onNewChannel && onNewChannel()}
+          title="New channel"
+          style={{
+            flexShrink: 0, padding: '6px 10px',
+            background: 'transparent',
+            border: '1px dashed var(--hairline-strong)',
+            borderRadius: 4, color: 'var(--blue)',
+            fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}
+        >
+          <span>+</span>
+          <span>NEW</span>
+        </button>
       </div>
     </div>
   );
@@ -212,6 +227,7 @@ function DashboardMobile(props) {
       <MobileHeader
         state={props.state}
         channels={props.state?.channels}
+        onNewChannel={props.onNewChannel}
         activeId={props.activeChannel}
         onSelect={props.onSelectChannel}
       />

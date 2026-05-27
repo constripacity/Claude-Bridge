@@ -138,6 +138,32 @@ function App() {
     await refreshMessages();
   }, [refreshState, refreshMessages]);
 
+  const handleNewChannel = useCallback(async () => {
+    const raw = window.prompt(
+      'New channel name (convention: project:role — e.g. demo:orchestrator):',
+      'demo:orchestrator',
+    );
+    if (!raw) return;
+    const name = raw.trim();
+    if (!name) return;
+    // Channels come into existence on first write — drop a hello marker.
+    const hello = JSON.stringify({
+      type: 'hello',
+      from: sender,
+      ts: new Date().toISOString(),
+    });
+    await fetchJson('/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: name, sender, content: hello }),
+    });
+    setActiveChannel(name);
+    localStorage.setItem('bridge.activeChannel', name);
+    setSelectedMsg(null);
+    setDetail(null);
+    await refreshState();
+  }, [sender, refreshState]);
+
   const handleClear = useCallback(async (channel) => {
     if (!confirm(`Clear ALL messages from "${channel}"? This cannot be undone.`)) return;
     await fetchJson('/api/clear', {
@@ -168,6 +194,7 @@ function App() {
         onSelectMessage={handleSelectMessage}
         onSend={handleSend}
         onClear={handleClear}
+        onNewChannel={handleNewChannel}
         defaultSender={sender}
       />
       {err && (

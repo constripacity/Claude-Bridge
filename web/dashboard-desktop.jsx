@@ -82,7 +82,7 @@ const HeaderBtn = ({ children }) => (
   }}>{children}</button>
 );
 
-function Sidebar({ channels, activeId, onSelect }) {
+function Sidebar({ channels, activeId, onSelect, onNewChannel }) {
   const grouped = {};
   (channels || []).forEach(c => {
     grouped[c.group || ''] = grouped[c.group || ''] || [];
@@ -94,7 +94,26 @@ function Sidebar({ channels, activeId, onSelect }) {
       borderRight: '1px solid var(--hairline)',
       display: 'flex', flexDirection: 'column',
     }}>
-      <ChromeLabel count={channels?.length ?? 0}>Channels</ChromeLabel>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <div style={{ flex: 1 }}>
+          <ChromeLabel count={channels?.length ?? 0}>Channels</ChromeLabel>
+        </div>
+        <button
+          onClick={() => onNewChannel && onNewChannel()}
+          title="New channel"
+          style={{
+            margin: '8px 12px 4px 0', padding: '4px 8px',
+            background: 'transparent',
+            border: '1px solid var(--hairline-strong)', borderRadius: 4,
+            color: 'var(--text-mid)', fontFamily: 'var(--mono)', fontSize: 10,
+            letterSpacing: '0.04em', cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}
+        >
+          <span style={{ color: 'var(--blue)' }}>+</span>
+          <span>NEW</span>
+        </button>
+      </div>
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px' }}>
         {Object.entries(grouped).map(([group, chs]) => (
           <div key={group} style={{ marginBottom: 14 }}>
@@ -528,6 +547,7 @@ function DashboardDesktop(props) {
           channels={props.state?.channels}
           activeId={props.activeChannel}
           onSelect={props.onSelectChannel}
+          onNewChannel={props.onNewChannel}
         />
         <MessageFeed
           channel={props.activeChannel}

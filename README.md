@@ -309,6 +309,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome, especially for the roadmap 
 
 ---
 
+## Credits
+
+**Constripacity** – for founding this project and architecting the bridge.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

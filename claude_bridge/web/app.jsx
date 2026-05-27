@@ -6,8 +6,50 @@ const { useState, useEffect, useRef, useCallback } = React;
 const POLL_MS = 2000;
 const MOBILE_MAX = 640;
 
-async function fetchJson(url, opts = {}) {
-  const res = await fetch(url, opts);
+const TOKEN_KEY = 'claude-bridge:auth-token';
+
+function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || null; } catch (_) { return null; }
+}
+
+function setToken(t) {
+  try {
+    if (t) localStorage.setItem(TOKEN_KEY, t);
+    else   localStorage.removeItem(TOKEN_KEY);
+  } catch (_) {}
+}
+
+function promptForToken() {
+  const entered = window.prompt(
+    'This bridge requires an auth token.\n\n' +
+    'Paste the CLAUDE_BRIDGE_AUTH_TOKEN value (or the --auth-token CLI value) ' +
+    'used when the bridge was started:',
+    '',
+  );
+  if (entered && entered.trim()) {
+    setToken(entered.trim());
+    return entered.trim();
+  }
+  return null;
+}
+
+class AuthError extends Error {
+  constructor(msg) { super(msg); this.name = 'AuthError'; }
+}
+
+async function fetchJson(url, opts = {}, { retryOn401 = true } = {}) {
+  const token = getToken();
+  const headers = { ...(opts.headers || {}) };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(url, { ...opts, headers });
+  if (res.status === 401) {
+    if (retryOn401) {
+      setToken(null);
+      const next = promptForToken();
+      if (next) return fetchJson(url, opts, { retryOn401: false });
+    }
+    throw new AuthError('Bridge rejected token');
+  }
   if (!res.ok) {
     let body = '';
     try { body = await res.text(); } catch (_) {}
@@ -53,6 +95,13 @@ function App() {
   const [selectedMsg, setSelectedMsg]   = useState(null);
   const [detail, setDetail]             = useState(null);
   const [err, setErr]                   = useState(null);
+  const [hasToken, setHasToken]         = useState(() => !!getToken());
+
+  const clearToken = useCallback(() => {
+    if (!confirm('Clear stored bridge token? You will be re-prompted on the next request.')) return;
+    setToken(null);
+    setHasToken(false);
+  }, []);
 
   const width = useViewport();
   const sender = defaultSender();
@@ -74,6 +123,9 @@ function App() {
       setErr(null);
     } catch (e) {
       setErr(String(e));
+    } finally {
+      // Keep auth badge in sync with whatever fetchJson stored after prompts
+      setHasToken(!!getToken());
     }
   }, []);
   useEffect(() => { refreshState(); }, [refreshState]);
@@ -207,6 +259,27 @@ function App() {
           zIndex: 100,
         }}>
           {err}
+        </div>
+      )}
+      {hasToken && (
+        <div style={{
+          position: 'fixed', top: 12, right: 12,
+          background: 'rgba(63, 185, 80, 0.12)',
+          border: '1px solid rgba(63, 185, 80, 0.4)',
+          borderRadius: 6, padding: '4px 10px',
+          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)',
+          display: 'flex', alignItems: 'center', gap: 8, zIndex: 100,
+        }}>
+          <span>Auth ✓</span>
+          <button
+            onClick={clearToken}
+            style={{
+              background: 'transparent', border: '1px solid rgba(63, 185, 80, 0.4)',
+              borderRadius: 4, padding: '1px 6px', color: 'var(--green)',
+              fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer',
+            }}
+            title="Clear stored bridge token"
+          >clear</button>
         </div>
       )}
     </div>

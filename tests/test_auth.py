@@ -83,18 +83,18 @@ def test_message_detail_route_protected(client, auth_on):
     assert client.get("/api/messages/anything").status_code == 401
 
 
-def test_dashboard_root_protected(client, auth_on):
-    """Static dashboard files (served via Mount('/', StaticFiles)) require auth too."""
+def test_dashboard_root_is_public_even_with_auth(client, auth_on):
+    """Static dashboard files must load WITHOUT auth so the JS can prompt
+    the user for a token — otherwise the bootstrap is impossible."""
     import os
     if not os.path.isdir(bridge.WEB_DIR):
         pytest.skip("web/ directory not present in this build")
-    # Without header — 401, NOT a static file
     r = client.get("/")
-    assert r.status_code == 401
-    # With header — dashboard html
-    r = client.get("/", headers=HEADERS_OK)
     assert r.status_code == 200
     assert "Claude Bridge" in r.text
+    # And the JSX bundle is also public
+    r = client.get("/shared.jsx")
+    assert r.status_code == 200
 
 
 def test_malformed_authorization_header(client, auth_on):

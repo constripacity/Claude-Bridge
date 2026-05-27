@@ -9,7 +9,7 @@ your global `~/.claude/CLAUDE.md`.
 ## What is Claude Bridge
 
 Claude Bridge is a lightweight MCP relay server running on one machine (the
-**host**) at `localhost:8765` locally, or `<HOST_TAILSCALE_IP>:8765` from any
+**host**) at `localhost:8765` locally, or `<host-address>:8765` from any
 other machine on the same Tailscale network or LAN.
 
 It gives every Claude Code instance a set of tools to send and receive messages
@@ -135,6 +135,11 @@ Run this at the start of every bridged Claude Code session:
 3. Identify your role (orchestrator or worker) for this session
 4. Clear stale channels if starting a new phase: `bridge_clear`
 5. Announce your presence: `bridge_send(channel="general:status", sender="<id>", content="<id> online — starting <project> session")`
+
+If the host bridge runs with `CLAUDE_BRIDGE_AUTH_TOKEN` (or `--auth-token`)
+set, your `claude mcp add` for this machine needs the matching
+`--header "Authorization: Bearer <token>"`; without it `bridge_ping` will
+fail and every tool call returns an auth error.
 
 ---
 

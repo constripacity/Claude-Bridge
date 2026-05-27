@@ -95,9 +95,17 @@ class BridgeError(Exception):
 class BridgeClient:
     """Thin async wrapper around the bridge's JSON API."""
 
-    def __init__(self, base_url: str = "http://localhost:8765", timeout: float = 5.0) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8765",
+        timeout: float = 5.0,
+        token: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url, timeout=timeout, headers=headers
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()

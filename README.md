@@ -168,7 +168,7 @@ The bridge is plain HTTP + Server-Sent Events. As long as the client machine can
 - **Different networks** (the original motivating case) — use a private overlay between machines:
   - [Tailscale](https://tailscale.com) is the simplest and what this project is tested against. Install on both machines, join the same tailnet, use the host's tailnet IP in the remote MCP config, and keep `:8765` firewalled to the tailnet — no public exposure.
   - Other mesh VPNs (ZeroTier, Nebula, headscale) work the same way.
-  - A reverse proxy with auth on a public host also works, but the bridge itself has no auth yet (see roadmap), so don't expose a bare instance to the open internet.
+  - A reverse proxy with auth on a public host works too. If you need to expose the bridge directly to a less-trusted network, enable the built-in [Bearer token](#authentication) instead of running bare.
 
 ---
 
@@ -220,6 +220,41 @@ Design reference for every layout (full / compact / narrow / states) lives in `d
 
 ---
 
+## Authentication
+
+The bridge runs **without auth by default** — anyone who can reach `:8765` can read or write any channel. That's fine for `localhost`, a trusted LAN, or a tailnet. If you need to expose the bridge to a less-trusted network, set a token:
+
+```bash
+export CLAUDE_BRIDGE_AUTH_TOKEN="$(openssl rand -hex 32)"
+claude-bridge
+# or pass it directly on the CLI (CLI wins over env var):
+claude-bridge --auth-token "$(openssl rand -hex 32)"
+```
+
+When set, every endpoint except `/status` (the healthcheck) requires `Authorization: Bearer <token>`. Constant-time comparison; no other state. Unset the env var and the bridge runs exactly as it did before — auth is fully opt-in.
+
+**Connecting clients with auth on:**
+
+```bash
+# claude mcp add — pass the header on registration:
+claude mcp add --transport sse -s user claude-bridge \
+    http://<host-address>:8765/sse \
+    --header "Authorization: Bearer $CLAUDE_BRIDGE_AUTH_TOKEN"
+
+# TUI — picks up CLAUDE_BRIDGE_AUTH_TOKEN automatically, or pass --token:
+python -m claude_bridge.tui --url http://<host-address>:8765 \
+    --token "$CLAUDE_BRIDGE_AUTH_TOKEN"
+
+# Web dashboard — open the URL in a browser. On the first /api/* call it
+# prompts you for the token, stores it in localStorage, and attaches it as
+# a Bearer header to every subsequent request. A green "Auth ✓" badge in
+# the top-right with a `clear` button lets you rotate or forget.
+```
+
+**stdio mode is unaffected** — `claude-bridge --stdio` is a subprocess pipe, not a network surface, so it skips the auth check entirely.
+
+---
+
 ## Persistence
 
 Messages are persisted to a local SQLite database (`./claude-bridge.db` by default) so they survive server restarts. Override the path with the `CLAUDE_BRIDGE_DB` environment variable:
@@ -239,7 +274,7 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 - [x] Web dashboard (live channel monitor in the browser)
 - [x] `claude-bridge` PyPI package + CLI entrypoint
 - [x] stdio transport (for pure local use without HTTP)
-- [ ] Auth token support (shared secret per channel or global)
+- [x] Auth token support (Bearer token on every HTTP endpoint, opt-in)
 - [ ] Submit to [MCP server directory](https://github.com/modelcontextprotocol/servers)
 - [ ] WebSocket transport (alternative to SSE) — *deferred unless requested*
 

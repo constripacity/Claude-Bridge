@@ -175,3 +175,56 @@ def test_messages_since_id(asgi_client):
         finally:
             await asgi_client.aclose()
     run(go())
+
+
+# ── BridgeClient token support ──────────────────────────────────────────────
+
+def _build_asgi_client(token: str | None = None) -> BridgeClient:
+    transport = httpx.ASGITransport(app=bridge.app)
+    headers = {"Authorization": f"Bearer {token}"} if token else None
+    client = BridgeClient(base_url="http://testserver", token=token)
+    client._client = httpx.AsyncClient(
+        transport=transport, base_url="http://testserver", timeout=5.0, headers=headers
+    )
+    return client
+
+
+def test_token_client_succeeds_against_auth_enabled_bridge(fresh_db, monkeypatch):
+    monkeypatch.setattr(bridge, "AUTH_TOKEN", "s3cret")
+    client = _build_asgi_client(token="s3cret")
+
+    async def go():
+        try:
+            state = await client.state()
+            assert state["service"] == "claude-bridge"
+        finally:
+            await client.aclose()
+    run(go())
+
+
+def test_tokenless_client_rejected_by_auth_enabled_bridge(fresh_db, monkeypatch):
+    monkeypatch.setattr(bridge, "AUTH_TOKEN", "s3cret")
+    client = _build_asgi_client(token=None)
+
+    async def go():
+        try:
+            with pytest.raises(BridgeError) as exc:
+                await client.state()
+            assert exc.value.status == 401
+        finally:
+            await client.aclose()
+    run(go())
+
+
+def test_wrong_token_rejected(fresh_db, monkeypatch):
+    monkeypatch.setattr(bridge, "AUTH_TOKEN", "s3cret")
+    client = _build_asgi_client(token="not-the-token")
+
+    async def go():
+        try:
+            with pytest.raises(BridgeError) as exc:
+                await client.state()
+            assert exc.value.status == 401
+        finally:
+            await client.aclose()
+    run(go())

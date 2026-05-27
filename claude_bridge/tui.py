@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import sys
 from datetime import datetime, timezone
@@ -481,10 +482,12 @@ class BridgeTUI(App):
     filter_text: reactive[str] = reactive("")
     inspector_visible: reactive[bool] = reactive(True)
 
-    def __init__(self, url: str, sender: str) -> None:
+    def __init__(self, url: str, sender: str, token: str | None = None) -> None:
         super().__init__()
         self._url = url
         self._sender = sender
+        self._token = token
+        self._auth_warned = False
         self._client: BridgeClient | None = None
         self._last_seen_id: dict[str, str] = {}      # channel -> last msg id polled
         self._cached_messages: dict[str, list[dict[str, Any]]] = {}
@@ -515,7 +518,7 @@ class BridgeTUI(App):
         yield Footer()
 
     async def on_mount(self) -> None:
-        self._client = BridgeClient(self._url)
+        self._client = BridgeClient(self._url, token=self._token)
         topbar = self.query_one(TopBar)
         topbar.set_state(online=True, url=self._url, uptime="—", n_channels=0, n_messages=0)
         inspector = self.query_one(Inspector)
@@ -536,12 +539,26 @@ class BridgeTUI(App):
         topbar = self.query_one(TopBar)
         try:
             state = await self._client.state()
-        except (httpx.HTTPError, BridgeError):
+        except BridgeError as e:
+            if e.status == 401 and not self._auth_warned:
+                self._auth_warned = True
+                self.notify(
+                    "Bridge rejected token — set --token or CLAUDE_BRIDGE_AUTH_TOKEN",
+                    severity="error", timeout=0,
+                )
             topbar.set_state(
                 online=False, url=self._url, uptime="—",
                 n_channels=0, n_messages=0,
             )
             return
+        except httpx.HTTPError:
+            topbar.set_state(
+                online=False, url=self._url, uptime="—",
+                n_channels=0, n_messages=0,
+            )
+            return
+        # Recovered: clear the latch so a future 401 re-notifies
+        self._auth_warned = False
         topbar.set_state(
             online=True,
             url=self._url,
@@ -736,9 +753,13 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Claude Bridge — Terminal UI")
     p.add_argument("--url", default=DEFAULT_URL, help=f"Bridge HTTP base URL (default: {DEFAULT_URL})")
     p.add_argument("--sender", default=default_sender(), help="Sender id used by the send composer")
+    p.add_argument("--token", default=None,
+                   help="Bearer auth token for the bridge. Also reads CLAUDE_BRIDGE_AUTH_TOKEN env var; "
+                        "the CLI flag wins. Leave unset for a bridge without auth.")
     args = p.parse_args(argv)
 
-    app = BridgeTUI(url=args.url, sender=args.sender)
+    token = args.token or os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None
+    app = BridgeTUI(url=args.url, sender=args.sender, token=token)
     app.run()
     return 0
 

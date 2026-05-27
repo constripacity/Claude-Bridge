@@ -19,11 +19,21 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 
-PUBLIC_PATHS = frozenset({"/status"})
+# Routes that require the Bearer token when auth is enabled. Everything else
+# (including /status and the static dashboard mount) is public — the dashboard
+# JS prompts for the token client-side and attaches it to /api/* calls.
+PROTECTED_PREFIXES = ("/api/", "/messages/")
+PROTECTED_PATHS = frozenset({"/sse"})
+
+
+def _is_protected(path: str) -> bool:
+    if path in PROTECTED_PATHS:
+        return True
+    return any(path.startswith(p) for p in PROTECTED_PREFIXES)
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Enforce `Authorization: Bearer <token>` on every non-public route.
+    """Enforce `Authorization: Bearer <token>` on protected routes only.
 
     The token is read from `token_getter()` at request time (not at middleware
     construction), so the bridge can be reconfigured without rebuilding the
@@ -39,7 +49,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         token = self._get_token()
         if not token:
             return await call_next(request)
-        if request.url.path in PUBLIC_PATHS:
+        if not _is_protected(request.url.path):
             return await call_next(request)
         expected = f"Bearer {token}".encode()
         actual = request.headers.get("Authorization", "").encode()

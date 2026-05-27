@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv
+venv/
+*.egg-info/
+dist/
+build/
+.DS_Store
+Thumbs.db
+*.log
+
+# Claude Code session state
+.claude/
+
+# Claude Bridge
+claude-bridge.db
+claude-bridge.db-journal
+claude-bridge.db-wal
+claude-bridge.db-shm
+.pytest_cache/
+.ruff_cache/
+.pytest-tmp/

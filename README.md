@@ -1,5 +1,7 @@
 # Claude Bridge
 
+<!-- mcp-name: io.github.constripacity/claude-code-bridge -->
+
 **Real-time cross-machine communication for Claude Code agents.**
 
 ![CI](https://github.com/constripacity/claude-bridge/actions/workflows/ci.yml/badge.svg)

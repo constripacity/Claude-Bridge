@@ -99,6 +99,25 @@ def test_api_messages_since_id(client):
     assert [m["preview"] for m in msgs] == ["two", "three"]
 
 
+def test_api_messages_unknown_since_id_returns_warning(client):
+    """Unknown since_id returns empty + warning instead of silent full dump.
+
+    Pre-v0.7.4 the SQL fell back to `since_seq = 0` and returned every message
+    in the channel up to `limit=500` — a silent flood on every poll once the
+    cursor went bad. Now the API tells the client their cursor is stale.
+    """
+    client.post("/api/send", json={"channel": "c", "sender": "a", "content": "one"})
+    client.post("/api/send", json={"channel": "c", "sender": "a", "content": "two"})
+
+    bogus = "00000000-0000-0000-0000-000000000000"
+    r = client.get(f"/api/messages?channel=c&since_id={bogus}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["channel"] == "c"
+    assert body["messages"] == []
+    assert body["warning"] == "since_id_not_found"
+
+
 def test_api_messages_truncates_preview(client):
     long = "x" * 500
     client.post("/api/send", json={"channel": "c", "sender": "a", "content": long})

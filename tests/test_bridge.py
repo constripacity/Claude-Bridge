@@ -71,6 +71,28 @@ async def test_receive_since_id_returns_only_newer(fresh_db):
 
 
 @pytest.mark.asyncio
+async def test_receive_unknown_since_id_returns_stale_cursor(fresh_db):
+    """Unknown since_id must NOT silently dump the channel from the start.
+
+    Pre-v0.7.4 behaviour was a silent fallback to `since_seq = 0`, which
+    flooded the caller with the full channel on every poll once the cursor
+    went bad (e.g. after `bridge_clear`).
+    """
+    await bridge.dispatch_tool("bridge_send", {"channel": "c", "sender": "a", "content": "one"})
+    await bridge.dispatch_tool("bridge_send", {"channel": "c", "sender": "a", "content": "two"})
+
+    bogus = "00000000-0000-0000-0000-000000000000"
+    out = text(await bridge.dispatch_tool("bridge_receive", {
+        "channel": "c", "since_id": bogus,
+    }))
+    assert "not found" in out
+    assert "cursor stale" in out
+    # And critically, neither of the existing messages leaked into the response.
+    assert "one" not in out
+    assert "two" not in out
+
+
+@pytest.mark.asyncio
 async def test_receive_limit_applies(fresh_db):
     for i in range(10):
         await bridge.dispatch_tool("bridge_send", {

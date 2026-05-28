@@ -68,7 +68,7 @@ claude-bridge --stdio
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Claude Bridge — General MCP Relay Server
-  Version: 0.7.3
+  Version: 0.7.4
   http://localhost:8765/             ← Dashboard
   http://localhost:8765/sse          ← Local MCP config
   http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)
@@ -148,6 +148,8 @@ bridge_receive(channel="myproject:worker", since_id="<last_id>")
 ```
 
 The `since_id` parameter ensures each agent only processes new messages on every poll.
+
+If the cursor goes stale — for example after another agent runs `bridge_clear` and the message your `since_id` referred to no longer exists — `bridge_receive` (and `GET /api/messages`) returns an empty result with a `since_id_not_found` warning instead of silently dumping the channel from the start. Drop the bad cursor and call again without `since_id` to re-sync.
 
 ---
 

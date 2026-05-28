@@ -37,7 +37,7 @@ from starlette.requests import Request
 from .auth import BearerAuthMiddleware, RequestSizeLimitMiddleware
 
 
-VERSION = "0.7.3"
+VERSION = "0.7.4"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 AUTH_TOKEN = os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None
@@ -276,7 +276,19 @@ async def dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextConten
 
         if since_id:
             row = conn.execute("SELECT seq FROM messages WHERE id = ?", (since_id,)).fetchone()
-            since_seq = row["seq"] if row else 0
+            if row is None:
+                # Cursor stale — message was cleared, never existed, or was
+                # never on this server. Earlier versions silently fell back to
+                # "from the beginning" here, which floods the caller with the
+                # full channel on every poll once the cursor goes bad. Return
+                # an empty result and tell the caller their cursor is stale so
+                # they can decide whether to drop it and re-sync.
+                return [TextContent(type="text", text=(
+                    f"[{channel}] — since_id {since_id[:8]} not found "
+                    f"(cursor stale, channel may have been cleared); "
+                    f"call again without since_id to read from the start"
+                ))]
+            since_seq = row["seq"]
             rows = conn.execute(
                 "SELECT seq, id, sender, content, timestamp FROM messages "
                 "WHERE channel = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
@@ -443,7 +455,15 @@ async def api_messages(request: Request) -> JSONResponse:
     conn = db()
     if since_id:
         row = conn.execute("SELECT seq FROM messages WHERE id = ?", (since_id,)).fetchone()
-        since_seq = row["seq"] if row else 0
+        if row is None:
+            # See bridge_receive — return empty + warning instead of silently
+            # dumping the channel from the beginning when the cursor is stale.
+            return JSONResponse({
+                "channel": channel,
+                "messages": [],
+                "warning": "since_id_not_found",
+            })
+        since_seq = row["seq"]
         rows = conn.execute(
             "SELECT seq, id, sender, content, timestamp FROM messages "
             "WHERE channel = ? AND seq > ? ORDER BY seq ASC LIMIT ?",

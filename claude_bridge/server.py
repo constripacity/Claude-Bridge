@@ -37,7 +37,7 @@ from starlette.requests import Request
 from .auth import BearerAuthMiddleware, RequestSizeLimitMiddleware
 
 
-VERSION = "0.7.4"
+VERSION = "0.7.5"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 AUTH_TOKEN = os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None

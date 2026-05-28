@@ -4,6 +4,7 @@ Used by claude_bridge.tui. Wraps the five endpoints exposed by the bridge:
     GET  /api/state
     GET  /api/messages?channel=X[&since_id=Y][&limit=N]
     GET  /api/messages/{id}
+    GET  /events/channel/<name>   (SSE stream)
     POST /api/send
     POST /api/clear
 
@@ -13,6 +14,7 @@ Kept separate from the UI so it's unit-testable without spinning up Textual.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -156,3 +158,45 @@ class BridgeClient:
 
     async def clear(self, channel: str) -> dict[str, Any]:
         return await self._post("/api/clear", {"channel": channel})
+
+    async def stream_channel(
+        self,
+        channel: str,
+        since_id: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Async generator yielding parsed SSE events from /events/channel/<name>.
+
+        Each yielded dict has at least an 'event' key and a 'data' key (JSON-decoded
+        when the payload is valid JSON, otherwise a raw string).
+        Raises httpx.HTTPError or BridgeError on connection or auth failure.
+        """
+        params: dict[str, str] = {}
+        if since_id:
+            params["since_id"] = since_id
+        # read=None disables the per-read timeout so the long-lived stream doesn't
+        # time out between keepalive pings; connect/write timeouts stay tight.
+        timeout = httpx.Timeout(connect=5.0, read=None, write=5.0, pool=5.0)
+        async with self._client.stream(
+            "GET", f"/events/channel/{channel}", params=params, timeout=timeout,
+        ) as response:
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise BridgeError(response.status_code, body.decode())
+            current: dict[str, Any] = {}
+            async for line in response.aiter_lines():
+                if line == "":
+                    if current:
+                        yield current
+                        current = {}
+                elif line.startswith(":"):
+                    continue  # keepalive comment line
+                elif line.startswith("event: "):
+                    current["event"] = line[7:]
+                elif line.startswith("data: "):
+                    raw = line[6:]
+                    try:
+                        current["data"] = json.loads(raw)
+                    except (ValueError, TypeError):
+                        current["data"] = raw
+                elif line.startswith("id: "):
+                    current["id"] = line[4:]

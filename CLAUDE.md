@@ -45,6 +45,19 @@ your machine if unsure.
 | `bridge_status` | Get a full cross-channel overview — useful at session start |
 | `bridge_clear` | Reset a channel when starting a fresh task phase |
 
+### Live event stream (HTTP, not MCP)
+
+`GET /events/channel/<name>` is a Server-Sent Events endpoint available to
+browsers, scripts, and the TUI. The dashboard and TUI consume it automatically.
+For external scripts, keep using `bridge_receive` polling — SSE only makes sense
+for persistent connections.
+
+If auth is enabled, the EventSource API cannot send custom headers. Pass the
+token as `?token=<value>` instead of a Bearer header **on `/events/` paths
+only**. Note: query-parameter tokens appear in server access logs — scrub
+`/events/.*[?&]token=` in your reverse proxy log config if log retention is
+a concern.
+
 ---
 
 ## Channel Convention

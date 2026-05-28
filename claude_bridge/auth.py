@@ -26,14 +26,24 @@ from starlette.responses import JSONResponse
 # Routes that require the Bearer token when auth is enabled. Everything else
 # (including /status and the static dashboard mount) is public — the dashboard
 # JS prompts for the token client-side and attaches it to /api/* calls.
-PROTECTED_PREFIXES = ("/api/", "/messages/")
+PROTECTED_PREFIXES = ("/api/", "/messages/", "/events/")
 PROTECTED_PATHS = frozenset({"/sse"})
+
+# Paths that accept the token via `?token=` query param in addition to the
+# Authorization header. Needed for the EventSource API, which can't send
+# custom headers — the dashboard's only way to authenticate against
+# `/events/channel/...`. Keep this set deliberately small.
+QUERY_TOKEN_PREFIXES = ("/events/",)
 
 
 def _is_protected(path: str) -> bool:
     if path in PROTECTED_PATHS:
         return True
     return any(path.startswith(p) for p in PROTECTED_PREFIXES)
+
+
+def _accepts_query_token(path: str) -> bool:
+    return any(path.startswith(p) for p in QUERY_TOKEN_PREFIXES)
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
@@ -53,18 +63,27 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         token = self._get_token()
         if not token:
             return await call_next(request)
-        if not _is_protected(request.url.path):
+        path = request.url.path
+        if not _is_protected(path):
             return await call_next(request)
         # RFC 7235: auth-scheme is case-insensitive. Parse "<scheme> <credential>"
         # and compare only the credential half with constant-time compare to
         # avoid leaking the expected token's length via the prefix-equality check.
         header = request.headers.get("Authorization", "")
         scheme, _, credential = header.partition(" ")
-        if scheme.lower() != "bearer" or not credential:
+        if scheme.lower() == "bearer" and credential:
+            if hmac.compare_digest(credential.encode(), token.encode()):
+                return await call_next(request)
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not hmac.compare_digest(credential.encode(), token.encode()):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return await call_next(request)
+        # No (or malformed) Authorization header. The EventSource API can't
+        # send headers, so for `/events/...` only we accept `?token=` as a
+        # fallback. Documented caveat: tokens leak into access logs — operators
+        # serving this behind a reverse proxy should scrub them.
+        if _accepts_query_token(path):
+            query_token = request.query_params.get("token", "")
+            if query_token and hmac.compare_digest(query_token.encode(), token.encode()):
+                return await call_next(request)
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):

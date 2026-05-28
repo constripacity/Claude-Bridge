@@ -68,7 +68,7 @@ claude-bridge --stdio
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Claude Bridge — General MCP Relay Server
-  Version: 0.7.6
+  Version: 0.8.0
   http://localhost:8765/             ← Dashboard
   http://localhost:8765/sse          ← Local MCP config
   http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)
@@ -196,9 +196,11 @@ A ready-to-use `CLAUDE.md` is included. Drop it in your project root or add it t
 
 ## Web Dashboard
 
-Open `http://localhost:8765/` in any browser for a live monitor of channels, messages, and senders. It polls `/api/state` + `/api/messages` every 2 seconds, lets you click into any message for a JSON-highlighted inspector, and includes a working send composer (pick a sender, type or paste JSON, ⌘↵ / Ctrl↵ to send) and a per-channel clear button. Adapts to mobile viewports automatically.
+Open `http://localhost:8765/` in any browser for a live monitor of channels, messages, and senders. Messages appear the instant they land — no 2-second lag. Click into any message for a JSON-highlighted inspector. Includes a send composer (pick a sender, type or paste JSON, ⌘↵ / Ctrl↵ to send) and a per-channel clear button. Adapts to mobile viewports automatically.
 
-The dashboard speaks a small JSON API alongside the MCP `/sse` transport:
+The dashboard uses a live SSE stream for the active channel's message feed and continues polling `/api/state` every 2 seconds for channel list and counts.
+
+The JSON API (polling endpoints remain available for scripts and external tools):
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -207,8 +209,50 @@ The dashboard speaks a small JSON API alongside the MCP `/sse` transport:
 | `GET /api/messages/{id}` | Full message detail (parsed JSON, byte size) |
 | `POST /api/send` `{channel,sender,content}` | Same effect as `bridge_send` |
 | `POST /api/clear` `{channel}` | Drop all messages on a channel |
+| `GET /events/channel/<name>[?since_id=Y]` | Live SSE stream for one channel |
 
 Sends from the dashboard are indistinguishable from MCP `bridge_send` calls — they share the same INSERT path.
+
+---
+
+## Live event stream
+
+`GET /events/channel/<name>` is a Server-Sent Events endpoint. Open it and you get a real-time push of every message and clear event on that channel with ~0 ms latency. The polling JSON endpoints remain unchanged for backwards compatibility.
+
+**Events emitted:**
+
+| Event | Payload | When |
+|-------|---------|------|
+| `message` | `{seq, id, channel, sender, content, timestamp}` | On every new message |
+| `clear` | `{channel, cleared}` | When `bridge_clear` or `POST /api/clear` runs |
+| `cursor_stale` | `{since_id}` | Reconnect cursor no longer exists — re-sync via `/api/messages` |
+| `replay_truncated` | `{limit}` | Backlog > 500 rows — re-sync via `/api/messages` |
+
+**Browser (`EventSource`):**
+```javascript
+const es = new EventSource('/events/channel/myproject:worker');
+es.addEventListener('message', e => console.log(JSON.parse(e.data)));
+es.addEventListener('clear',   e => console.log('channel cleared'));
+```
+
+The browser `EventSource` API cannot send custom headers, so when auth is enabled, pass the token as a query parameter instead:
+```javascript
+const es = new EventSource(`/events/channel/myproject:worker?token=${encodeURIComponent(token)}`);
+```
+
+> **Access-log note:** query-parameter tokens appear in server access logs. If you run the bridge behind a reverse proxy (nginx, Caddy), add a log-scrub rule for `/events/.*[?&]token=` to avoid leaking tokens into your log retention.
+
+**Backlog replay on reconnect:** browsers send `Last-Event-ID` automatically on reconnect (using the `id:` field from each SSE frame). TUI clients can pass `?since_id=<last-msg-id>` explicitly. Up to 500 messages are replayed; if more exist, a `replay_truncated` event fires and the client should re-fetch via `/api/messages`.
+
+**Caps (env-tunable, no restart needed):**
+
+| Variable | Default | What it limits |
+|----------|---------|----------------|
+| `CLAUDE_BRIDGE_MAX_SSE` | 100 | Total concurrent subscribers across all channels |
+| `CLAUDE_BRIDGE_MAX_SSE_PER_CHANNEL` | 25 | Subscribers per channel |
+| `CLAUDE_BRIDGE_SSE_REPLAY_LIMIT` | 500 | Backlog rows replayed on reconnect |
+
+Requests past a cap get `503 Service Unavailable`. A comment-line keepalive is sent every 15 s to survive the 30–60 s idle cutoff most reverse proxies enforce.
 
 ---
 
@@ -292,6 +336,7 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 - [x] stdio transport (for pure local use without HTTP)
 - [x] Auth token support (Bearer token on every HTTP endpoint, opt-in)
 - [x] Listed on the [MCP Server Registry](https://registry.modelcontextprotocol.io/) as `io.github.constripacity/claude-code-bridge`
+- [x] Live SSE push stream per channel (`GET /events/channel/<name>`) — dashboard + TUI switch from polling to push
 - [ ] WebSocket transport (alternative to SSE) — *deferred unless requested*
 
 ---
@@ -299,7 +344,7 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 ## Requirements
 
 - Python 3.10+
-- `mcp`, `starlette`, `uvicorn`, `anyio` (declared in `pyproject.toml`; installed automatically by `pip install claude-bridge`)
+- `mcp`, `starlette`, `uvicorn`, `anyio`, `sse-starlette` (declared in `pyproject.toml`; installed automatically by `pip install claude-bridge`)
 - A reachable network path between machines — `localhost`, LAN, Tailscale, or any other route (see [Networking](#networking))
 
 ---

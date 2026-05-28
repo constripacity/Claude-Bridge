@@ -115,7 +115,7 @@ function App() {
     }
   }, [state, activeChannel]);
 
-  // ── Poll /api/state ──────────────────────────────────────────────────────
+  // ── Poll /api/state (keep polling — channel list, counts, uptime) ────────
   const refreshState = useCallback(async () => {
     try {
       const s = await fetchJson('/api/state');
@@ -131,20 +131,53 @@ function App() {
   useEffect(() => { refreshState(); }, [refreshState]);
   useInterval(refreshState, POLL_MS);
 
-  // ── Poll /api/messages for the active channel ───────────────────────────
-  const refreshMessages = useCallback(async () => {
+  // ── Live event stream for the active channel (replaces messages poll) ────
+  // One-shot /api/messages for initial backlog, then EventSource for live
+  // updates. /api/state poll is unchanged — it covers channel list + counts.
+  const esRef = useRef(null);
+
+  const fetchBacklog = useCallback((channel) => {
+    fetchJson(`/api/messages?channel=${encodeURIComponent(channel)}&limit=100`)
+      .then(data => setMessages(data.messages || []))
+      .catch(e => setErr(String(e)));
+  }, []);
+
+  useEffect(() => {
+    if (esRef.current) { esRef.current.close(); esRef.current = null; }
     if (!activeChannel) { setMessages([]); return; }
-    try {
-      const data = await fetchJson(
-        `/api/messages?channel=${encodeURIComponent(activeChannel)}&limit=100`
-      );
-      setMessages(data.messages || []);
-    } catch (e) {
-      setErr(String(e));
-    }
-  }, [activeChannel]);
-  useEffect(() => { refreshMessages(); }, [refreshMessages]);
-  useInterval(refreshMessages, POLL_MS);
+
+    fetchBacklog(activeChannel);
+
+    const token = getToken();
+    const url = `/events/channel/${encodeURIComponent(activeChannel)}` +
+      (token ? `?token=${encodeURIComponent(token)}` : '');
+    const es = new EventSource(url);
+    esRef.current = es;
+
+    es.addEventListener('message', (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg]);
+      } catch (_) {}
+    });
+
+    es.addEventListener('clear', () => {
+      setMessages([]);
+      setSelectedMsg(null);
+      setDetail(null);
+    });
+
+    // cursor_stale or replay_truncated: our resume point is gone or overflow —
+    // re-sync from /api/messages without a cursor.
+    es.addEventListener('cursor_stale',      () => fetchBacklog(activeChannel));
+    es.addEventListener('replay_truncated',  () => fetchBacklog(activeChannel));
+
+    es.addEventListener('error', () => {
+      setErr('Event stream error — reconnecting…');
+    });
+
+    return () => { es.close(); esRef.current = null; };
+  }, [activeChannel, fetchBacklog]);
 
   // ── Auto-select latest message on channel switch / first load ───────────
   useEffect(() => {
@@ -185,10 +218,9 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel, sender, content }),
     });
-    // Refresh immediately so user sees their message land
+    // Message arrives via EventSource; refresh state for channel count update.
     await refreshState();
-    await refreshMessages();
-  }, [refreshState, refreshMessages]);
+  }, [refreshState]);
 
   const handleNewChannel = useCallback(async () => {
     const raw = window.prompt(
@@ -223,11 +255,10 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel }),
     });
-    setSelectedMsg(null);
-    setDetail(null);
+    // `clear` SSE event handles setMessages([])/setSelectedMsg/setDetail;
+    // refresh state for the channel count.
     await refreshState();
-    await refreshMessages();
-  }, [refreshState, refreshMessages]);
+  }, [refreshState]);
 
   const channelMeta = (state?.channels || []).find(c => c.id === activeChannel) || null;
 

@@ -15,6 +15,7 @@ Design reference: docs/design/terminal/  (React/JSX mockups of every layout).
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import platform
@@ -573,14 +574,11 @@ class BridgeTUI(App):
         sidebar = self.query_one(ChannelList)
         await sidebar.populate(channels, self.active_channel)
 
-        # Auto-pick the first channel if nothing's active
+        # Auto-pick the first channel if nothing's active; start its SSE stream.
         if self.active_channel is None and channels:
             self.active_channel = channels[0]["id"]
             self._update_feed_header(channels[0])
-
-        # Refresh feed for the active channel
-        if self.active_channel:
-            await self._refresh_feed(self.active_channel)
+            self._start_stream(channels[0]["id"])
 
     async def _refresh_feed(self, channel: str) -> None:
         if not self._client:
@@ -605,6 +603,85 @@ class BridgeTUI(App):
         prev_latest_id = prev[-1]["id"] if prev else None
         if not prev or (prev_latest_id != latest["id"] and self._inspected_id in (None, prev_latest_id)):
             await self._inspect(latest["id"])
+            try:
+                feed.move_cursor(row=feed.row_count - 1)
+            except Exception:
+                pass
+
+    @work(exclusive=True, name="channel-stream")
+    async def _start_stream(self, channel: str) -> None:
+        """Long-running worker: fetch initial backlog then consume the SSE stream.
+
+        exclusive=True means switching channels cancels the current worker and
+        starts a fresh one — the previous stream is torn down automatically.
+        On transient connection errors the worker reconnects after 2 s.
+        """
+        if not self._client:
+            return
+        self._cached_messages[channel] = []
+
+        # Initial backlog fetch
+        try:
+            data = await self._client.messages(channel, limit=200)
+        except (httpx.HTTPError, BridgeError):
+            data = {}
+        messages = data.get("messages", [])
+        self._cached_messages[channel] = messages
+        self._render_feed_if_active(channel, messages, [])
+
+        last_id: str | None = messages[-1]["id"] if messages else None
+
+        while True:
+            try:
+                async for event in self._client.stream_channel(channel, since_id=last_id):
+                    etype = event.get("event", "message")
+                    payload = event.get("data", {})
+                    if etype == "message":
+                        msg = payload if isinstance(payload, dict) else {}
+                        msgs = self._cached_messages.get(channel, [])
+                        if not any(m["id"] == msg.get("id") for m in msgs):
+                            prev = list(msgs)
+                            msgs = [*msgs, msg]
+                            self._cached_messages[channel] = msgs
+                            self._render_feed_if_active(channel, msgs, prev)
+                        if eid := event.get("id"):
+                            last_id = eid
+                    elif etype == "clear":
+                        self._cached_messages[channel] = []
+                        if self.active_channel == channel:
+                            self.query_one(FeedTable).render_messages([], self.filter_text)
+                            self.query_one(Inspector).show_empty()
+                            self._inspected_id = None
+                        last_id = None
+                    elif etype in ("cursor_stale", "replay_truncated"):
+                        try:
+                            d = await self._client.messages(channel, limit=200)
+                        except (httpx.HTTPError, BridgeError):
+                            d = {}
+                        msgs = d.get("messages", [])
+                        prev = self._cached_messages.get(channel, [])
+                        self._cached_messages[channel] = msgs
+                        self._render_feed_if_active(channel, msgs, prev)
+                        last_id = msgs[-1]["id"] if msgs else None
+            except (httpx.HTTPError, BridgeError):
+                await asyncio.sleep(2.0)
+
+    def _render_feed_if_active(
+        self,
+        channel: str,
+        messages: list[dict[str, Any]],
+        prev: list[dict[str, Any]],
+    ) -> None:
+        if self.active_channel != channel:
+            return
+        feed = self.query_one(FeedTable)
+        feed.render_messages(messages, self.filter_text)
+        if not messages:
+            return
+        latest = messages[-1]
+        prev_latest_id = prev[-1]["id"] if prev else None
+        if not prev or (prev_latest_id != latest["id"] and self._inspected_id in (None, prev_latest_id)):
+            self.run_worker(self._inspect(latest["id"]), exclusive=True)
             try:
                 feed.move_cursor(row=feed.row_count - 1)
             except Exception:
@@ -636,8 +713,7 @@ class BridgeTUI(App):
             if ch["id"] == ch_id:
                 self._update_feed_header(ch)
                 break
-        # fire-and-forget refresh
-        self.run_worker(self._refresh_feed(ch_id), exclusive=False)
+        self._start_stream(ch_id)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         msg_id = event.row_key.value
@@ -733,7 +809,8 @@ class BridgeTUI(App):
             return
         self.filter_text = result
         if self.active_channel:
-            await self._refresh_feed(self.active_channel)
+            msgs = self._cached_messages.get(self.active_channel, [])
+            self.query_one(FeedTable).render_messages(msgs, self.filter_text)
             for ch in self._all_channels:
                 if ch["id"] == self.active_channel:
                     self._update_feed_header(ch)

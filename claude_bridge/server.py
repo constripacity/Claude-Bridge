@@ -23,9 +23,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 import anyio
+from anyio.streams.memory import MemoryObjectSendStream
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
+from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route
 from starlette.middleware import Middleware
@@ -37,7 +39,7 @@ from starlette.requests import Request
 from .auth import BearerAuthMiddleware, RequestSizeLimitMiddleware
 
 
-VERSION = "0.7.6"
+VERSION = "0.8.0"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 AUTH_TOKEN = os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None
@@ -64,6 +66,17 @@ MAX_REQUEST_BYTES = 256 * 1024
 # decode for defense-in-depth (the Content-Length cap above already rejects
 # most abuse; this catches the boundary).
 MAX_MESSAGE_BYTES = 128 * 1024
+
+# Live event-stream caps. Global cap protects against a runaway client opening
+# thousands of EventSources; per-channel cap stops one busy channel from
+# starving the global pool. Subscribers past the cap get 503. Backlog cap is
+# how many historical messages a reconnecting subscriber can replay before we
+# tell them to re-sync via /api/messages (avoids unbounded replay after days
+# of disconnect). All three are env-tunable so operators can grow without a
+# code change.
+MAX_SSE_SUBSCRIBERS = int(os.environ.get("CLAUDE_BRIDGE_MAX_SSE", "100"))
+MAX_SSE_PER_CHANNEL = int(os.environ.get("CLAUDE_BRIDGE_MAX_SSE_PER_CHANNEL", "25"))
+SSE_REPLAY_LIMIT = int(os.environ.get("CLAUDE_BRIDGE_SSE_REPLAY_LIMIT", "500"))
 
 
 # ── Persistence ──────────────────────────────────────────────────────────────
@@ -120,6 +133,56 @@ def _is_json_str(s: str) -> bool:
         return False
 
 
+# ── Live event broker ────────────────────────────────────────────────────────
+#
+# Subscribers to `GET /events/channel/<name>` register a memory object stream
+# here; insert_message / clear_channel push events into matching streams. Slow
+# subscribers get events dropped rather than blocking the writer — we count
+# the drops so /api/state can surface whether the caps need raising.
+
+_subscribers: dict[str, set[MemoryObjectSendStream]] = {}
+_dropped_events_total: int = 0
+
+
+def _subscriber_count_total() -> int:
+    return sum(len(s) for s in _subscribers.values())
+
+
+async def _broadcast(channel: str, envelope: dict[str, Any]) -> None:
+    """Fan an event envelope out to every subscriber of `channel`.
+
+    Envelope shape: {"event": "message"|"clear"|..., "data": {...}, "id": "..."}.
+    Send is non-blocking — if a subscriber's buffer is full, we drop the event
+    for that subscriber rather than stall the writer (writers must stay snappy
+    so `bridge_send` latency isn't held hostage by a slow dashboard tab).
+    """
+    global _dropped_events_total
+    streams = list(_subscribers.get(channel, ()))
+    for stream in streams:
+        try:
+            stream.send_nowait(envelope)
+        except anyio.WouldBlock:
+            _dropped_events_total += 1
+        except anyio.BrokenResourceError:
+            # Subscriber's receive side is gone (their task already exited);
+            # drop them from the set so we stop trying.
+            _subscribers.get(channel, set()).discard(stream)
+
+
+def _message_envelope(seq: int, msg_id: str, sender: str, content: str, timestamp: str) -> dict[str, Any]:
+    return {
+        "event": "message",
+        "id": msg_id,
+        "data": {
+            "seq": seq,
+            "id": msg_id,
+            "sender": sender,
+            "content": content,
+            "timestamp": timestamp,
+        },
+    }
+
+
 async def insert_message(channel: str, sender: str, content: str) -> tuple[str, int, str]:
     """Append a message to a channel. Returns (id, seq, timestamp)."""
     msg_id = str(uuid.uuid4())
@@ -130,13 +193,19 @@ async def insert_message(channel: str, sender: str, content: str) -> tuple[str, 
             (msg_id, channel, sender, content, ts),
         )
         seq = cur.lastrowid
+    await _broadcast(channel, _message_envelope(seq, msg_id, sender, content, ts))
     return msg_id, seq, ts
 
 
 async def clear_channel(channel: str) -> int:
     async with _write_lock:
         cur = db().execute("DELETE FROM messages WHERE channel = ?", (channel,))
-        return cur.rowcount
+        count = cur.rowcount
+    await _broadcast(channel, {
+        "event": "clear",
+        "data": {"channel": channel, "cleared": count},
+    })
+    return count
 
 
 # ── MCP Server ────────────────────────────────────────────────────────────────
@@ -437,6 +506,8 @@ async def api_state(request: Request) -> JSONResponse:
         "uptime_human": format_uptime(up),
         "total_messages": sum(c["count"] for c in channels),
         "channels": channels,
+        "sse_subscribers": _subscriber_count_total(),
+        "sse_dropped_events": _dropped_events_total,
         "server_time": utc_now_iso(),
     })
 
@@ -550,7 +621,106 @@ async def api_clear(request: Request) -> JSONResponse:
     return JSONResponse({"channel": channel, "cleared": count})
 
 
-# ── SSE Transport ─────────────────────────────────────────────────────────────
+# ── Live event stream per channel ────────────────────────────────────────────
+
+
+async def sse_channel(request: Request):
+    """Server-sent events for a single channel.
+
+    Emits `message` events as inserts land, `clear` events when the channel is
+    cleared, plus `cursor_stale` / `replay_truncated` signals on connect when
+    a `Last-Event-ID` header (or `?since_id=` query param) points at a message
+    we don't have or asks for more backlog than we'll replay.
+
+    Auth: same Bearer-token gate as the rest of `/events/`, with an
+    `?token=...` query-param fallback because the EventSource API can't send
+    custom headers. See `auth.py` for the bypass logic.
+    """
+    channel = request.path_params["channel"]
+
+    # Cap enforcement before allocating a stream. Per-channel cap first so a
+    # busy channel can't drain the global pool by itself.
+    if len(_subscribers.get(channel, ())) >= MAX_SSE_PER_CHANNEL:
+        return JSONResponse(
+            {"error": f"channel '{channel}' has reached its subscriber cap"},
+            status_code=503,
+        )
+    if _subscriber_count_total() >= MAX_SSE_SUBSCRIBERS:
+        return JSONResponse(
+            {"error": "server subscriber cap reached"},
+            status_code=503,
+        )
+
+    # Resolve the resume cursor: `Last-Event-ID` is the standard SSE reconnect
+    # header (browsers send it automatically). `?since_id=` is the explicit
+    # opt-in for first-time connects (TUI uses this).
+    last_id = request.headers.get("Last-Event-ID") or request.query_params.get("since_id")
+
+    send_stream, recv_stream = anyio.create_memory_object_stream(max_buffer_size=100)
+    _subscribers.setdefault(channel, set()).add(send_stream)
+
+    async def event_gen():
+        try:
+            # 1. Backlog replay if the caller has a resume cursor.
+            if last_id:
+                row = db().execute(
+                    "SELECT seq FROM messages WHERE id = ?", (last_id,)
+                ).fetchone()
+                if row is None:
+                    # Cursor stale — symmetry with bridge_receive / api_messages
+                    # since v0.7.4 (M3). Tell the client their cursor is gone
+                    # and they should re-sync via /api/messages without it.
+                    yield {
+                        "event": "cursor_stale",
+                        "data": json.dumps({"since_id": last_id}),
+                    }
+                else:
+                    # Fetch one extra row so we can detect truncation cheaply.
+                    rows = db().execute(
+                        "SELECT seq, id, sender, content, timestamp FROM messages "
+                        "WHERE channel = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
+                        (channel, row["seq"], SSE_REPLAY_LIMIT + 1),
+                    ).fetchall()
+                    truncated = len(rows) > SSE_REPLAY_LIMIT
+                    for m in rows[:SSE_REPLAY_LIMIT]:
+                        yield {
+                            "event": "message",
+                            "id": m["id"],
+                            "data": json.dumps({
+                                "seq": m["seq"],
+                                "id": m["id"],
+                                "sender": m["sender"],
+                                "content": m["content"],
+                                "timestamp": m["timestamp"],
+                            }),
+                        }
+                    if truncated:
+                        yield {
+                            "event": "replay_truncated",
+                            "data": json.dumps({"limit": SSE_REPLAY_LIMIT}),
+                        }
+
+            # 2. Live stream until the client disconnects.
+            async with recv_stream:
+                async for envelope in recv_stream:
+                    out = {
+                        "event": envelope["event"],
+                        "data": json.dumps(envelope["data"]),
+                    }
+                    if "id" in envelope:
+                        out["id"] = envelope["id"]
+                    yield out
+        finally:
+            _subscribers.get(channel, set()).discard(send_stream)
+            send_stream.close()
+
+    # ping=15 emits a comment-line keepalive every 15s so the stream survives
+    # the 30–60s idle cutoff most reverse proxies enforce (nginx, Cloudflare,
+    # Tailscale Funnel).
+    return EventSourceResponse(event_gen(), ping=15)
+
+
+# ── SSE Transport (MCP) ───────────────────────────────────────────────────────
 
 sse_transport = SseServerTransport("/messages/")
 
@@ -605,6 +775,7 @@ _routes = [
     Route("/api/messages/{msg_id}", endpoint=api_message_detail),
     Route("/api/send", endpoint=api_send, methods=["POST"]),
     Route("/api/clear", endpoint=api_clear, methods=["POST"]),
+    Route("/events/channel/{channel:path}", endpoint=sse_channel),
     Route("/sse", endpoint=handle_sse),
     Mount("/messages/", app=handle_post_message),
 ]

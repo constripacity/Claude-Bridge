@@ -68,7 +68,7 @@ claude-bridge --stdio
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Claude Bridge — General MCP Relay Server
-  Version: 0.7.5
+  Version: 0.7.6
   http://localhost:8765/             ← Dashboard
   http://localhost:8765/sse          ← Local MCP config
   http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)

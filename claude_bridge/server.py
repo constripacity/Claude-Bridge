@@ -19,7 +19,8 @@ import json
 import uuid
 import sqlite3
 import asyncio
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import anyio
@@ -39,7 +40,7 @@ from starlette.requests import Request
 from .auth import BearerAuthMiddleware, RequestSizeLimitMiddleware
 
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 AUTH_TOKEN = os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None
@@ -78,6 +79,21 @@ MAX_SSE_SUBSCRIBERS = int(os.environ.get("CLAUDE_BRIDGE_MAX_SSE", "100"))
 MAX_SSE_PER_CHANNEL = int(os.environ.get("CLAUDE_BRIDGE_MAX_SSE_PER_CHANNEL", "25"))
 SSE_REPLAY_LIMIT = int(os.environ.get("CLAUDE_BRIDGE_SSE_REPLAY_LIMIT", "500"))
 
+# Message retention. 0 = keep forever (the default — the bridge is a transport,
+# not an archive, but a long-running host shouldn't grow SQLite without bound).
+# When > 0, a background sweep deletes messages whose timestamp is older than
+# `RETENTION_DAYS` days, every `RETENTION_SWEEP_SECONDS`. Opt-in, with a loud
+# startup banner, because it's the first feature that deletes historical state.
+RETENTION_DAYS = int(os.environ.get("CLAUDE_BRIDGE_RETENTION_DAYS", "0"))
+RETENTION_SWEEP_SECONDS = int(os.environ.get("CLAUDE_BRIDGE_RETENTION_SWEEP_SECONDS", "3600"))
+
+# Audit log. Off by default. When on, auth failures, oversize-body rejects,
+# channel clears, and channel creates are recorded to a separate `audit` table
+# (timestamp + client IP), readable via GET /api/audit (auth-protected). Opt-in
+# because the audit trail is itself a privacy surface; kept separate from
+# message retention since forensic logs usually outlive content.
+AUDIT_ENABLED = bool(os.environ.get("CLAUDE_BRIDGE_AUDIT_LOG"))
+
 
 # ── Persistence ──────────────────────────────────────────────────────────────
 
@@ -105,6 +121,18 @@ def db() -> sqlite3.Connection:
             )
         """)
         _conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel)")
+        # Timestamp index so the retention sweep's range delete stays cheap.
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT    NOT NULL,
+                event     TEXT    NOT NULL,
+                channel   TEXT,
+                detail    TEXT,
+                ip        TEXT
+            )
+        """)
     return _conn
 
 
@@ -183,16 +211,44 @@ def _message_envelope(seq: int, msg_id: str, sender: str, content: str, timestam
     }
 
 
+async def record_audit(
+    event: str,
+    channel: str | None = None,
+    detail: str | None = None,
+    ip: str | None = None,
+) -> None:
+    """Append a forensic event to the `audit` table — no-op unless AUDIT_ENABLED.
+
+    Reads the flag at call time so tests (and a future runtime toggle) take
+    effect without rebuilding anything. Audit rows are intentionally not swept
+    by message retention — forensic logs usually need to outlive content.
+    """
+    if not AUDIT_ENABLED:
+        return
+    async with _write_lock:
+        db().execute(
+            "INSERT INTO audit (timestamp, event, channel, detail, ip) VALUES (?, ?, ?, ?, ?)",
+            (utc_now_iso(), event, channel, detail, ip),
+        )
+
+
 async def insert_message(channel: str, sender: str, content: str) -> tuple[str, int, str]:
     """Append a message to a channel. Returns (id, seq, timestamp)."""
     msg_id = str(uuid.uuid4())
     ts = utc_now_iso()
     async with _write_lock:
+        # Channel-create detection for the audit log: cheap existence probe,
+        # only when auditing is on so the common path stays a single INSERT.
+        is_new_channel = AUDIT_ENABLED and db().execute(
+            "SELECT 1 FROM messages WHERE channel = ? LIMIT 1", (channel,)
+        ).fetchone() is None
         cur = db().execute(
             "INSERT INTO messages (id, channel, sender, content, timestamp) VALUES (?, ?, ?, ?, ?)",
             (msg_id, channel, sender, content, ts),
         )
         seq = cur.lastrowid
+    if is_new_channel:
+        await record_audit("channel_create", channel=channel, detail=f"first message by {sender}")
     await _broadcast(channel, _message_envelope(seq, msg_id, sender, content, ts))
     return msg_id, seq, ts
 
@@ -205,7 +261,46 @@ async def clear_channel(channel: str) -> int:
         "event": "clear",
         "data": {"channel": channel, "cleared": count},
     })
+    await record_audit("channel_clear", channel=channel, detail=f"{count} message(s)")
     return count
+
+
+# ── Message retention ────────────────────────────────────────────────────────
+#
+# Opt-in (`--retention-days N` / CLAUDE_BRIDGE_RETENTION_DAYS). A background
+# sweep started in the app lifespan deletes messages older than the cutoff.
+
+
+def _retention_cutoff_iso(days: int, now: datetime | None = None) -> str:
+    """The ISO timestamp `days` before `now`. Same `...Z` UTC shape as stored
+    timestamps so a plain string comparison in SQL is a correct time compare."""
+    base = now or datetime.now(timezone.utc)
+    return (base - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+
+
+async def delete_messages_before(cutoff_iso: str) -> int:
+    """Delete every message with `timestamp < cutoff_iso`. Returns the count."""
+    async with _write_lock:
+        cur = db().execute("DELETE FROM messages WHERE timestamp < ?", (cutoff_iso,))
+        return cur.rowcount
+
+
+async def retention_sweep_once() -> int:
+    """Run one retention pass. No-op (returns 0) when retention is disabled."""
+    if RETENTION_DAYS <= 0:
+        return 0
+    return await delete_messages_before(_retention_cutoff_iso(RETENTION_DAYS))
+
+
+async def _retention_loop() -> None:
+    """Periodic retention sweep — runs until cancelled at shutdown."""
+    while True:
+        await asyncio.sleep(RETENTION_SWEEP_SECONDS)
+        try:
+            await retention_sweep_once()
+        except Exception:
+            # A failed sweep must not kill the loop; next tick retries.
+            pass
 
 
 # ── MCP Server ────────────────────────────────────────────────────────────────
@@ -508,6 +603,8 @@ async def api_state(request: Request) -> JSONResponse:
         "channels": channels,
         "sse_subscribers": _subscriber_count_total(),
         "sse_dropped_events": _dropped_events_total,
+        "retention_days": RETENTION_DAYS,
+        "audit_enabled": AUDIT_ENABLED,
         "server_time": utc_now_iso(),
     })
 
@@ -619,6 +716,27 @@ async def api_clear(request: Request) -> JSONResponse:
         return JSONResponse({"error": "missing or empty: channel"}, status_code=400)
     count = await clear_channel(channel)
     return JSONResponse({"channel": channel, "cleared": count})
+
+
+async def api_audit(request: Request) -> JSONResponse:
+    """Recent audit events, newest first. Lives under /api/ so it inherits the
+    Bearer-token gate when auth is enabled. Returns `enabled: false` with an
+    empty list when the audit log is off, so a dashboard can tell the
+    difference between "auditing off" and "nothing logged yet"."""
+    try:
+        limit = int(request.query_params.get("limit", 100))
+    except ValueError:
+        limit = 100
+    limit = max(1, min(limit, 1000))
+    rows = db().execute(
+        "SELECT id, timestamp, event, channel, detail, ip FROM audit "
+        "ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return JSONResponse({
+        "enabled": AUDIT_ENABLED,
+        "events": [dict(r) for r in rows],
+    })
 
 
 # ── Live event stream per channel ────────────────────────────────────────────
@@ -791,6 +909,39 @@ async def run_stdio() -> None:
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
+
+async def _audit_http_reject(event: str, path: str, ip: str | None) -> None:
+    """Audit hook handed to the middleware. Decouples auth.py from this module
+    (it just calls back with the event name, path, and client IP)."""
+    await record_audit(event, detail=path, ip=ip)
+
+
+@asynccontextmanager
+async def _lifespan(app: Starlette):
+    """Start the retention sweep when enabled; tear it down cleanly on shutdown.
+
+    Runs an immediate sweep on boot (so a restart with a freshly-lowered
+    retention window takes effect at once) then the periodic loop.
+    """
+    db()  # ensure schema exists before any sweep/insert
+    task: asyncio.Task | None = None
+    if RETENTION_DAYS > 0:
+        try:
+            await retention_sweep_once()
+        except Exception:
+            pass
+        task = asyncio.create_task(_retention_loop())
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
 _routes = [
     Route("/status", endpoint=http_status),
     Route("/api/state", endpoint=api_state),
@@ -798,6 +949,7 @@ _routes = [
     Route("/api/messages/{msg_id}", endpoint=api_message_detail),
     Route("/api/send", endpoint=api_send, methods=["POST"]),
     Route("/api/clear", endpoint=api_clear, methods=["POST"]),
+    Route("/api/audit", endpoint=api_audit),
     Route("/events/channel/{channel:path}", endpoint=sse_channel),
     Route("/sse", endpoint=handle_sse),
     Mount("/messages/", app=handle_post_message),
@@ -821,17 +973,26 @@ else:
 
 app = Starlette(
     routes=_routes,
+    lifespan=_lifespan,
     middleware=[
         # CORS first (outermost) so OPTIONS preflight doesn't get blocked by
         # the auth check before browsers can complete the handshake.
         Middleware(CORSMiddleware, **_cors_kwargs),
         # Reject obviously oversized POSTs at the Content-Length header before
         # reading any body.
-        Middleware(RequestSizeLimitMiddleware, max_bytes=MAX_REQUEST_BYTES),
+        Middleware(
+            RequestSizeLimitMiddleware,
+            max_bytes=MAX_REQUEST_BYTES,
+            on_reject=lambda path, ip: _audit_http_reject("oversize_reject", path, ip),
+        ),
         # Bearer-token auth — no-op when AUTH_TOKEN is None (opt-in).
         # token_getter reads at request time so monkeypatch and runtime
         # rotation both work without rebuilding the app.
-        Middleware(BearerAuthMiddleware, token_getter=lambda: AUTH_TOKEN),
+        Middleware(
+            BearerAuthMiddleware,
+            token_getter=lambda: AUTH_TOKEN,
+            on_auth_failure=lambda path, ip: _audit_http_reject("auth_failure", path, ip),
+        ),
     ],
 )
 

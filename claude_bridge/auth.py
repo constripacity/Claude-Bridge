@@ -16,11 +16,17 @@ The stdio transport is not affected by either middleware (no network surface).
 from __future__ import annotations
 
 import hmac
-from typing import Callable
+from typing import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+
+# Audit hook shape: called as `await hook(path, client_ip)` when a request is
+# rejected. Optional — `None` means "don't audit" (the default). Kept as a
+# plain callable so this module stays decoupled from the server/audit store.
+AuditHook = Callable[[str, "str | None"], Awaitable[None]]
 
 
 # Routes that require the Bearer token when auth is enabled. Everything else
@@ -55,9 +61,17 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     If `token_getter()` returns a falsy value, the middleware is a no-op.
     """
 
-    def __init__(self, app, token_getter: Callable[[], str | None]):
+    def __init__(self, app, token_getter: Callable[[], str | None],
+                 on_auth_failure: AuditHook | None = None):
         super().__init__(app)
         self._get_token = token_getter
+        self._on_auth_failure = on_auth_failure
+
+    async def _deny(self, request: Request) -> JSONResponse:
+        if self._on_auth_failure is not None:
+            ip = request.client.host if request.client else None
+            await self._on_auth_failure(request.url.path, ip)
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     async def dispatch(self, request: Request, call_next):
         token = self._get_token()
@@ -74,7 +88,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         if scheme.lower() == "bearer" and credential:
             if hmac.compare_digest(credential.encode(), token.encode()):
                 return await call_next(request)
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return await self._deny(request)
         # No (or malformed) Authorization header. The EventSource API can't
         # send headers, so for `/events/...` only we accept `?token=` as a
         # fallback. Documented caveat: tokens leak into access logs — operators
@@ -83,7 +97,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             query_token = request.query_params.get("token", "")
             if query_token and hmac.compare_digest(query_token.encode(), token.encode()):
                 return await call_next(request)
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return await self._deny(request)
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
@@ -94,9 +108,16 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     `api_send`). This is the cheap rejection of the common case.
     """
 
-    def __init__(self, app, max_bytes: int):
+    def __init__(self, app, max_bytes: int, on_reject: AuditHook | None = None):
         super().__init__(app)
         self._max = max_bytes
+        self._on_reject = on_reject
+
+    async def _reject(self, request: Request, error: str, status: int) -> JSONResponse:
+        if self._on_reject is not None:
+            ip = request.client.host if request.client else None
+            await self._on_reject(request.url.path, ip)
+        return JSONResponse({"error": error}, status_code=status)
 
     async def dispatch(self, request: Request, call_next):
         if request.method in ("POST", "PUT", "PATCH"):
@@ -109,7 +130,5 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
                         {"error": "invalid content-length"}, status_code=400
                     )
                 if length > self._max:
-                    return JSONResponse(
-                        {"error": "request body too large"}, status_code=413
-                    )
+                    return await self._reject(request, "request body too large", 413)
         return await call_next(request)

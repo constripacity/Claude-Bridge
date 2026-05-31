@@ -69,6 +69,7 @@ include = [
     "/LICENSE",
     "/CONTRIBUTING.md",
     "/CLAUDE.md",
+    "/Dockerfile",
     "/pyproject.toml",
     "/pytest.ini",
 ]

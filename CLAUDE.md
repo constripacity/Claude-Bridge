@@ -217,7 +217,14 @@ Update this section as projects are onboarded:
 
 - Messages are persisted to SQLite (`./claude-bridge.db` by default) and survive
   server restarts. Long-term project memory should still live in your notes /
-  repo — the bridge is a transport, not an archive.
+  repo — the bridge is a transport, not an archive. If the host runs with
+  `--retention-days N`, messages older than N days are **deleted** by a
+  background sweep, so never treat the bridge as durable storage for anything
+  you can't reconstruct.
+- If the host runs with `--audit-log`, auth failures, oversize rejects, channel
+  clears, and channel creates are recorded to an `audit` table (readable at
+  `GET /api/audit`). Routine `bridge_send`/`bridge_receive` content is not
+  audited — only those security-relevant events.
 - Keep `bridge_status` calls cheap — use `since_id` on `bridge_receive` rather
   than re-reading full channel history on every poll.
 - The bridge is project-agnostic. This CLAUDE.md is the only place that gives

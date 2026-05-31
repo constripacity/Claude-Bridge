@@ -49,6 +49,17 @@ cd Claude-Bridge
 pip install -e .[dev]              # editable install with test/lint deps
 ```
 
+Or run the official container image (published to GHCR on every release):
+```bash
+docker run -p 8765:8765 -v claude-bridge-data:/data \
+  ghcr.io/constripacity/claude-bridge:latest
+# with auth, retention, and the audit log:
+docker run -p 8765:8765 -v claude-bridge-data:/data \
+  -e CLAUDE_BRIDGE_AUTH_TOKEN=secret \
+  ghcr.io/constripacity/claude-bridge:latest --host 0.0.0.0 --retention-days 30 --audit-log
+```
+The image binds `0.0.0.0` by default (publishing the port is already an opt-in to network exposure) and stores its SQLite DB in the `/data` volume. Tags: `latest` + `MAJOR.MINOR` + exact `X.Y.Z` per release, plus a moving `edge` from `main`.
+
 ### 2. Start the server
 
 ```bash
@@ -68,7 +79,7 @@ claude-bridge --stdio
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Claude Bridge — General MCP Relay Server
-  Version: 0.8.0
+  Version: 0.9.0
   http://localhost:8765/             ← Dashboard
   http://localhost:8765/sse          ← Local MCP config
   http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)
@@ -210,6 +221,7 @@ The JSON API (polling endpoints remain available for scripts and external tools)
 | `POST /api/send` `{channel,sender,content}` | Same effect as `bridge_send` |
 | `POST /api/clear` `{channel}` | Drop all messages on a channel |
 | `GET /events/channel/<name>[?since_id=Y]` | Live SSE stream for one channel |
+| `GET /api/audit[?limit=N]` | Recent audit events (when `--audit-log` is on) |
 
 Sends from the dashboard are indistinguishable from MCP `bridge_send` calls — they share the same INSERT path.
 
@@ -315,6 +327,34 @@ python -m claude_bridge.tui --url http://<host-address>:8765 \
 
 ---
 
+## TLS / HTTPS
+
+By default the bridge serves plain HTTP and the recommended cross-machine setup terminates TLS upstream — a reverse proxy (nginx, Caddy) or an overlay like Tailscale. For a self-contained HTTPS listener with no proxy, point the bridge at a cert + key:
+
+```bash
+claude-bridge --host 0.0.0.0 --tls-cert /etc/claude-bridge/cert.pem \
+                              --tls-key  /etc/claude-bridge/key.pem
+```
+
+Both flags are required together; the cert lifecycle (issuance, renewal) is the operator's responsibility. The banner switches to `https://` URLs when TLS is on. stdio mode ignores these flags.
+
+---
+
+## Audit log
+
+Opt-in forensic trail. With `--audit-log` (or `CLAUDE_BRIDGE_AUDIT_LOG=1`) the bridge records security-relevant events to a separate `audit` table:
+
+| Event | Logged when |
+|-------|-------------|
+| `auth_failure` | A protected request is rejected (`401`) |
+| `oversize_reject` | A request body exceeds the size cap (`413`) |
+| `channel_clear` | A channel is cleared (records the count) |
+| `channel_create` | The first message lands on a new channel |
+
+Each row carries a UTC timestamp and the client IP. Read recent events via `GET /api/audit?limit=N` (auth-protected when a token is set; returns `{"enabled": false, "events": []}` when the log is off). Audit rows are **not** removed by message retention — forensic logs usually need to outlive content.
+
+---
+
 ## Persistence
 
 Messages are persisted to a local SQLite database (`./claude-bridge.db` by default) so they survive server restarts. Override the path with the `CLAUDE_BRIDGE_DB` environment variable:
@@ -325,6 +365,16 @@ CLAUDE_BRIDGE_DB=/var/lib/claude-bridge/bridge.db claude-bridge
 ```
 
 The schema is a single `messages` table — easy to inspect with `sqlite3`. Use `bridge_clear` to drop a channel.
+
+### Retention / TTL
+
+By default messages are kept forever. On a long-running host you can cap growth with a retention window — a background sweep deletes messages older than the cutoff:
+
+```bash
+claude-bridge --retention-days 30        # or CLAUDE_BRIDGE_RETENTION_DAYS=30
+```
+
+This is opt-in and **deletes historical state**, so the startup banner prints a loud warning when it's on. The sweep runs on startup and then every `CLAUDE_BRIDGE_RETENTION_SWEEP_SECONDS` (default 3600). `retention_days` is surfaced in `/api/state`. Long-term project memory should live in your notes/repo regardless — the bridge is a transport, not an archive.
 
 ---
 
@@ -337,6 +387,10 @@ The schema is a single `messages` table — easy to inspect with `sqlite3`. Use 
 - [x] Auth token support (Bearer token on every HTTP endpoint, opt-in)
 - [x] Listed on the [MCP Server Registry](https://registry.modelcontextprotocol.io/) as `io.github.constripacity/claude-code-bridge`
 - [x] Live SSE push stream per channel (`GET /events/channel/<name>`) — dashboard + TUI switch from polling to push
+- [x] TLS / HTTPS support (`--tls-cert` / `--tls-key`)
+- [x] Message retention / TTL (`--retention-days`, background sweep)
+- [x] Audit log (`--audit-log`, `GET /api/audit`)
+- [x] Official Docker image published to GHCR
 - [ ] WebSocket transport (alternative to SSE) — *deferred unless requested*
 
 ---

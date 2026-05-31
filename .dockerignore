@@ -1,0 +1,28 @@
+# Keep the build context small and free of host state.
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.pytest-tmp
+dist
+build
+*.egg-info
+
+# Local runtime state — never bake a host's messages into an image.
+*.db
+*.db-shm
+*.db-wal
+
+# Docs / vault / archives not needed at runtime.
+docs
+_ui_extract
+*.zip
+
+# Editor / OS noise.
+.DS_Store
+.idea
+.vscode

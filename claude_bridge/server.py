@@ -624,6 +624,71 @@ async def api_clear(request: Request) -> JSONResponse:
 # ── Live event stream per channel ────────────────────────────────────────────
 
 
+def _sse_capacity_error(channel: str) -> JSONResponse | None:
+    """Return a 503 response if `channel` (or the server) is at its subscriber
+    cap, else None. Per-channel cap is checked first so a single busy channel
+    can't drain the global pool by itself. Split out from `sse_channel` so the
+    cap logic is unit-testable without opening a (never-ending) stream.
+    """
+    if len(_subscribers.get(channel, ())) >= MAX_SSE_PER_CHANNEL:
+        return JSONResponse(
+            {"error": f"channel '{channel}' has reached its subscriber cap"},
+            status_code=503,
+        )
+    if _subscriber_count_total() >= MAX_SSE_SUBSCRIBERS:
+        return JSONResponse(
+            {"error": "server subscriber cap reached"},
+            status_code=503,
+        )
+    return None
+
+
+async def _replay_backlog(channel: str, last_id: str):
+    """Yield the SSE backlog for a resuming subscriber, then return.
+
+    Given a resume cursor (`Last-Event-ID` / `?since_id=`), emit either a
+    single `cursor_stale` event (the cursor row is gone — symmetry with
+    bridge_receive / api_messages since v0.7.4 M3) or the messages newer than
+    it, capped at `SSE_REPLAY_LIMIT` and followed by `replay_truncated` if
+    there was more. Finite by construction — unlike the live loop it always
+    returns, which is what lets the test suite drive it directly instead of
+    streaming the infinite `EventSourceResponse` through an ASGI transport.
+    """
+    row = db().execute(
+        "SELECT seq FROM messages WHERE id = ?", (last_id,)
+    ).fetchone()
+    if row is None:
+        yield {
+            "event": "cursor_stale",
+            "data": json.dumps({"since_id": last_id}),
+        }
+        return
+    # Fetch one extra row so we can detect truncation cheaply.
+    rows = db().execute(
+        "SELECT seq, id, sender, content, timestamp FROM messages "
+        "WHERE channel = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
+        (channel, row["seq"], SSE_REPLAY_LIMIT + 1),
+    ).fetchall()
+    truncated = len(rows) > SSE_REPLAY_LIMIT
+    for m in rows[:SSE_REPLAY_LIMIT]:
+        yield {
+            "event": "message",
+            "id": m["id"],
+            "data": json.dumps({
+                "seq": m["seq"],
+                "id": m["id"],
+                "sender": m["sender"],
+                "content": m["content"],
+                "timestamp": m["timestamp"],
+            }),
+        }
+    if truncated:
+        yield {
+            "event": "replay_truncated",
+            "data": json.dumps({"limit": SSE_REPLAY_LIMIT}),
+        }
+
+
 async def sse_channel(request: Request):
     """Server-sent events for a single channel.
 
@@ -638,18 +703,10 @@ async def sse_channel(request: Request):
     """
     channel = request.path_params["channel"]
 
-    # Cap enforcement before allocating a stream. Per-channel cap first so a
-    # busy channel can't drain the global pool by itself.
-    if len(_subscribers.get(channel, ())) >= MAX_SSE_PER_CHANNEL:
-        return JSONResponse(
-            {"error": f"channel '{channel}' has reached its subscriber cap"},
-            status_code=503,
-        )
-    if _subscriber_count_total() >= MAX_SSE_SUBSCRIBERS:
-        return JSONResponse(
-            {"error": "server subscriber cap reached"},
-            status_code=503,
-        )
+    # Cap enforcement before allocating a stream.
+    cap_error = _sse_capacity_error(channel)
+    if cap_error is not None:
+        return cap_error
 
     # Resolve the resume cursor: `Last-Event-ID` is the standard SSE reconnect
     # header (browsers send it automatically). `?since_id=` is the explicit
@@ -663,42 +720,8 @@ async def sse_channel(request: Request):
         try:
             # 1. Backlog replay if the caller has a resume cursor.
             if last_id:
-                row = db().execute(
-                    "SELECT seq FROM messages WHERE id = ?", (last_id,)
-                ).fetchone()
-                if row is None:
-                    # Cursor stale — symmetry with bridge_receive / api_messages
-                    # since v0.7.4 (M3). Tell the client their cursor is gone
-                    # and they should re-sync via /api/messages without it.
-                    yield {
-                        "event": "cursor_stale",
-                        "data": json.dumps({"since_id": last_id}),
-                    }
-                else:
-                    # Fetch one extra row so we can detect truncation cheaply.
-                    rows = db().execute(
-                        "SELECT seq, id, sender, content, timestamp FROM messages "
-                        "WHERE channel = ? AND seq > ? ORDER BY seq ASC LIMIT ?",
-                        (channel, row["seq"], SSE_REPLAY_LIMIT + 1),
-                    ).fetchall()
-                    truncated = len(rows) > SSE_REPLAY_LIMIT
-                    for m in rows[:SSE_REPLAY_LIMIT]:
-                        yield {
-                            "event": "message",
-                            "id": m["id"],
-                            "data": json.dumps({
-                                "seq": m["seq"],
-                                "id": m["id"],
-                                "sender": m["sender"],
-                                "content": m["content"],
-                                "timestamp": m["timestamp"],
-                            }),
-                        }
-                    if truncated:
-                        yield {
-                            "event": "replay_truncated",
-                            "data": json.dumps({"limit": SSE_REPLAY_LIMIT}),
-                        }
+                async for evt in _replay_backlog(channel, last_id):
+                    yield evt
 
             # 2. Live stream until the client disconnects.
             async with recv_stream:

@@ -38,6 +38,10 @@ tui = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    # Hard per-test timeout so a hung test (e.g. a future streaming-response
+    # deadlock) fails in seconds instead of burning CI's 6h job ceiling, as
+    # the v0.8.0 SSE tests did before the broker-level rewrite.
+    "pytest-timeout>=2.3",
     "httpx>=0.27.0",
     "ruff>=0.6",
     "textual>=0.79.0",

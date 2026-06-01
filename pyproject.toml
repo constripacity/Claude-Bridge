@@ -1,5 +1,9 @@
 [build-system]
-requires = ["hatchling"]
+# Upper-bounded: hatchling >=1.30 emits core Metadata-Version 2.5, which
+# current twine and PyPI's upload validation reject. Pin below it so an
+# isolated `python -m build` produces 2.4 artifacts that upload cleanly.
+# Lift the cap once PyPI/twine accept 2.5.
+requires = ["hatchling>=1.27,<1.30"]
 build-backend = "hatchling.build"
 
 [project]

@@ -17,6 +17,7 @@ Remote machines connect:  <host-address>:8765 (LAN IP, Tailscale IP, etc.)
 import os
 import json
 import uuid
+import logging
 import sqlite3
 import asyncio
 from contextlib import asynccontextmanager
@@ -42,6 +43,7 @@ from .auth import BearerAuthMiddleware, RequestSizeLimitMiddleware
 
 VERSION = "0.9.0"
 SERVER_STARTED_AT = datetime.now(timezone.utc)
+logger = logging.getLogger("claude_bridge")
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 AUTH_TOKEN = os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None
 
@@ -299,8 +301,10 @@ async def _retention_loop() -> None:
         try:
             await retention_sweep_once()
         except Exception:
-            # A failed sweep must not kill the loop; next tick retries.
-            pass
+            # A failed sweep must not kill the loop; next tick retries. But a
+            # silent failure means the DB grows unbounded with nobody the
+            # wiser, so surface it (a chronically-failing sweep is a real bug).
+            logger.warning("retention sweep failed; retrying next tick", exc_info=True)
 
 
 # ── MCP Server ────────────────────────────────────────────────────────────────
@@ -929,7 +933,7 @@ async def _lifespan(app: Starlette):
         try:
             await retention_sweep_once()
         except Exception:
-            pass
+            logger.warning("initial retention sweep failed", exc_info=True)
         task = asyncio.create_task(_retention_loop())
     try:
         yield

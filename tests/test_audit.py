@@ -111,3 +111,18 @@ def test_api_audit_protected_when_auth_on(client, monkeypatch):
     assert client.get(
         "/api/audit", headers={"Authorization": "Bearer s3cret"}
     ).status_code == 200
+
+
+def test_failing_audit_hook_does_not_break_rejection(client, monkeypatch):
+    """The audit log is a side-channel: if record_audit blows up (SQLite busy,
+    disk full), the request must still get its clean 401 — not a 500."""
+    monkeypatch.setattr(bridge, "AUDIT_ENABLED", True)
+    monkeypatch.setattr(bridge, "AUTH_TOKEN", "s3cret")
+
+    async def boom(*a, **k):
+        raise RuntimeError("audit store exploded")
+
+    monkeypatch.setattr(bridge, "record_audit", boom)
+
+    # Unauthenticated → 401, even though the audit hook raises underneath.
+    assert client.get("/api/state").status_code == 401

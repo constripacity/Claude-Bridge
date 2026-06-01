@@ -16,17 +16,33 @@ The stdio transport is not affected by either middleware (no network surface).
 from __future__ import annotations
 
 import hmac
+import logging
 from typing import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+logger = logging.getLogger("claude_bridge")
+
 
 # Audit hook shape: called as `await hook(path, client_ip)` when a request is
 # rejected. Optional — `None` means "don't audit" (the default). Kept as a
 # plain callable so this module stays decoupled from the server/audit store.
 AuditHook = Callable[[str, "str | None"], Awaitable[None]]
+
+
+async def _run_hook(hook: AuditHook | None, request: Request) -> None:
+    """Fire an audit hook best-effort. The audit log is a side-channel — a
+    failure in it (e.g. SQLite busy, disk full) must never turn a clean 401/413
+    rejection into a 500, so swallow and log rather than propagate."""
+    if hook is None:
+        return
+    try:
+        ip = request.client.host if request.client else None
+        await hook(request.url.path, ip)
+    except Exception:
+        logger.warning("audit hook failed", exc_info=True)
 
 
 # Routes that require the Bearer token when auth is enabled. Everything else
@@ -68,9 +84,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         self._on_auth_failure = on_auth_failure
 
     async def _deny(self, request: Request) -> JSONResponse:
-        if self._on_auth_failure is not None:
-            ip = request.client.host if request.client else None
-            await self._on_auth_failure(request.url.path, ip)
+        await _run_hook(self._on_auth_failure, request)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     async def dispatch(self, request: Request, call_next):
@@ -114,9 +128,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
         self._on_reject = on_reject
 
     async def _reject(self, request: Request, error: str, status: int) -> JSONResponse:
-        if self._on_reject is not None:
-            ip = request.client.host if request.client else None
-            await self._on_reject(request.url.path, ip)
+        await _run_hook(self._on_reject, request)
         return JSONResponse({"error": error}, status_code=status)
 
     async def dispatch(self, request: Request, call_next):

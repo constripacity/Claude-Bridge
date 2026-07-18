@@ -576,6 +576,22 @@ async def _relay_events_through(event_seq: int) -> None:
             break
 
 
+async def _relay_events_best_effort(event_seq: int) -> None:
+    """Deliver committed events inline, but never let a post-commit relay error
+    fail an already-durable write. By the time this runs the message/clear is
+    committed; a transient SQLITE_BUSY in the relay's read would otherwise
+    surface to the caller as a failed send, prompting a retry that — without an
+    idempotency key — duplicates the message. The background outbox loop
+    redelivers from ``_observed_event_seq`` regardless, so swallowing here only
+    defers delivery, never drops it."""
+    try:
+        await _relay_events_through(event_seq)
+    except Exception:
+        logger.warning(
+            "inline event relay failed; outbox loop will redeliver", exc_info=True
+        )
+
+
 async def _event_outbox_loop() -> None:
     while True:
         try:
@@ -767,7 +783,7 @@ async def insert_message_reliable(
         await _record_audit_best_effort(
             "channel_create", channel=channel, detail=f"first message by {sender}"
         )
-    await _relay_events_through(event_seq)
+    await _relay_events_best_effort(event_seq)
     return MessageWrite(id=msg_id, seq=seq, timestamp=ts, content=encoded)
 
 
@@ -802,7 +818,7 @@ async def clear_channel(channel: str) -> int:
             if conn.in_transaction:
                 conn.rollback()
             raise
-    await _relay_events_through(event_seq)
+    await _relay_events_best_effort(event_seq)
     await _record_audit_best_effort(
         "channel_clear", channel=channel, detail=f"{count} message(s)"
     )
@@ -1889,10 +1905,19 @@ async def sse_channel(request: Request):
 
     async def event_gen():
         try:
+            # The subscriber's send_stream is registered before this generator
+            # starts replaying, so a message committed in the window between
+            # registration and the backlog query lands in BOTH the live buffer
+            # and the backlog. Remember replayed message ids and drop the live
+            # duplicate (EventSource does not dedupe). Bounded by SSE_REPLAY_LIMIT.
+            replayed_ids: set[str] = set()
+
             # 1. Backlog replay if the caller has a resume cursor.
             if last_id:
                 async for evt in _replay_backlog(channel, last_id):
                     yield evt
+                    if evt.get("event") == "message":
+                        replayed_ids.add(evt.get("id"))
                     if evt.get("event") == "replay_truncated":
                         # End this page. EventSource reconnects with the last
                         # delivered message id and requests the next bounded
@@ -1915,6 +1940,12 @@ async def sse_channel(request: Request):
                         # Revalidate opaque sessions even on an idle channel;
                         # revocation/expiry therefore closes an existing stream
                         # within five seconds rather than only on reconnect.
+                        continue
+                    if (
+                        envelope.get("event") == "message"
+                        and envelope.get("id") in replayed_ids
+                    ):
+                        # Already delivered during backlog replay (M2 dedup).
                         continue
                     out = {
                         "event": envelope["event"],

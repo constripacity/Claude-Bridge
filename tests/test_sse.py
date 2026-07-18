@@ -126,6 +126,49 @@ async def test_reconnect_with_last_event_id_replays_backlog(fresh_db, monkeypatc
     assert all("id" in m for m in messages)
 
 
+# ── 3b. Resume does not double-deliver a window message (M2) ────────────────
+#
+# The subscriber's send_stream is registered before the handler starts replaying
+# the backlog. A message committed in that window lands in BOTH the live buffer
+# and the backlog query; EventSource does not dedupe, so the handler must. This
+# drives the real `sse_channel` generator (via its `body_iterator`) with bounded
+# cancellation — the one live-path test the file otherwise avoids over HTTP.
+
+
+@pytest.mark.asyncio
+async def test_resume_does_not_double_deliver_window_message(fresh_db, monkeypatch):
+    from starlette.requests import Request
+
+    reset_broker(monkeypatch)
+    w0 = await bridge.insert_message_reliable("demo:c", "s", "m0")
+
+    req = Request({
+        "type": "http", "method": "GET", "path": "/events/channel/demo:c",
+        "headers": [(b"last-event-id", w0.id.encode())],
+        "query_string": b"", "path_params": {"channel": "demo:c"},
+        "client": ("127.0.0.1", 1234), "state": {},
+    })
+    req.state.bridge_auth = "bearer"
+    resp = await bridge.sse_channel(req)  # registers the subscriber
+
+    # Commit a message *after* registration but *before* draining: it enters both
+    # the live buffer and the DB backlog.
+    w1 = await bridge.insert_message_reliable("demo:c", "s", "m1")
+
+    seen: list[str] = []
+    with anyio.move_on_after(2):
+        async for evt in resp.body_iterator:
+            if evt.get("event") == "message":
+                data = evt["data"] if isinstance(evt["data"], dict) else json.loads(evt["data"])
+                seen.append(data["id"])
+    try:
+        await resp.body_iterator.aclose()
+    except Exception:
+        pass
+
+    assert seen.count(w1.id) == 1, f"window message delivered {seen.count(w1.id)}x (double-delivery)"
+
+
 # ── 4. Cursor-stale on unknown cursor (_replay_backlog) ─────────────────────
 
 

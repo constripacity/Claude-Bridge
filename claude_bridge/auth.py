@@ -110,7 +110,17 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 # symbolic client name. Network servers such as uvicorn supply
                 # a concrete address here.
                 is_remote_ip = False
-            if is_remote_ip and not self._allow_unauthenticated_network():
+            # A loopback peer is only trustworthy when the request did not pass
+            # through a proxy. Forwarding headers mean the real client is
+            # elsewhere and the loopback peer is the (same-host) reverse proxy,
+            # so an unauthenticated bridge fronted by nginx/Caddy/Tailscale
+            # Funnel must not be treated as local-only — otherwise every remote
+            # request arrives as 127.0.0.1 and the gate is defeated.
+            is_proxied = any(
+                request.headers.get(h)
+                for h in ("x-forwarded-for", "x-real-ip", "forwarded")
+            )
+            if (is_remote_ip or is_proxied) and not self._allow_unauthenticated_network():
                 await _run_hook(self._on_auth_failure, request)
                 return JSONResponse(
                     {"error": "unauthenticated network access is disabled"},

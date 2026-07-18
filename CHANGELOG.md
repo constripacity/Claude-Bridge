@@ -51,6 +51,13 @@ allows it.
 
 - CLI flags such as `--auth-token`, `--db`, `--no-dashboard`, CORS, retention,
   and audit settings being applied too late to affect the imported server.
+- SSE resume no longer double-delivers a message committed in the window
+  between subscriber registration and backlog replay (the live copy is now
+  dropped when the same message id was already sent in the backlog).
+- A transient error in the inline post-commit event relay no longer fails an
+  already-committed send; the durable outbox loop redelivers the event.
+- Protocol envelopes bound the artifact count before running per-item hashing
+  and canonical-JSON validation.
 - A cursor from one channel being accepted as a cursor for another channel.
 - Negative or extreme MCP receive limits returning unbounded history.
 - MCP sends bypassing the message-size limits used by the REST API.
@@ -66,6 +73,12 @@ allows it.
 
 - Network listeners fail closed unless their host and authentication policy is
   explicit.
+- Unauthenticated access behind a same-host reverse proxy is now rejected: a
+  loopback peer is trusted only when the request carries no proxy-forwarding
+  header (`X-Forwarded-For` / `X-Real-IP` / `Forwarded`). Otherwise every remote
+  request fronted by nginx/Caddy/Tailscale Funnel would arrive as `127.0.0.1`
+  and defeat the fail-closed gate. Set a token or pass
+  `--allow-unauthenticated-network` for a deliberately open trusted network.
 - Cross-origin browser mutations, invalid Host headers, and unsupported JSON
   media types are rejected before reaching handlers.
 - Audit retention is bounded instead of growing indefinitely.

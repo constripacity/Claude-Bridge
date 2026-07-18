@@ -242,6 +242,14 @@ class MessageEnvelope:
             )
         object.__setattr__(self, "created_at", _validate_created_at(self.created_at))
 
+        # Bound the count *before* constructing each entry, so a huge list can't
+        # run per-item sha256 / canonical-json validation before being rejected.
+        if len(self.artifacts) > DEFAULT_LIMITS.max_artifacts:
+            raise BridgeValidationError(
+                "artifacts",
+                "too_many",
+                f"must contain at most {DEFAULT_LIMITS.max_artifacts} entries",
+            )
         artifacts: list[ArtifactReference] = []
         for artifact in self.artifacts:
             if isinstance(artifact, ArtifactReference):
@@ -252,12 +260,6 @@ class MessageEnvelope:
                 raise BridgeValidationError(
                     "artifacts", "invalid_type", "each artifact must be an object"
                 )
-        if len(artifacts) > DEFAULT_LIMITS.max_artifacts:
-            raise BridgeValidationError(
-                "artifacts",
-                "too_many",
-                f"must contain at most {DEFAULT_LIMITS.max_artifacts} entries",
-            )
         object.__setattr__(self, "artifacts", tuple(artifacts))
 
         for field_name in ("metadata", "extensions"):

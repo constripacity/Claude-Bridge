@@ -28,6 +28,19 @@ def test_auth_disabled_by_default(client):
     }).status_code == 200
 
 
+def test_unauthenticated_proxied_request_is_rejected(client):
+    """M1 regression: with no token, a genuinely local (non-proxied) request is
+    allowed, but the same request carrying a proxy-forwarding header must be
+    treated as remote — behind a same-host reverse proxy every request arrives
+    from 127.0.0.1, so trusting the loopback peer would open the whole network.
+    """
+    assert client.get("/api/state").status_code == 200
+    for header in ("X-Forwarded-For", "X-Real-IP", "Forwarded"):
+        r = client.get("/api/state", headers={header: "203.0.113.9"})
+        assert r.status_code == 403, header
+        assert r.json() == {"error": "unauthenticated network access is disabled"}
+
+
 # ── Auth enabled ────────────────────────────────────────────────────────────
 
 @pytest.fixture

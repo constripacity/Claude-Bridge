@@ -60,7 +60,7 @@ Issues = "https://github.com/constripacity/Claude-Bridge/issues"
 claude-bridge = "claude_bridge.cli:main"
 
 [tool.hatch.version]
-path = "claude_bridge/server.py"
+path = "claude_bridge/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["claude_bridge"]

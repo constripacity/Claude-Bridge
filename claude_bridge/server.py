@@ -41,7 +41,7 @@ from starlette.requests import Request
 from .auth import BearerAuthMiddleware, RequestSizeLimitMiddleware
 
 
-VERSION = "0.9.1"
+from ._version import VERSION  # single source of truth (see _version.py)
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 logger = logging.getLogger("claude_bridge")
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")

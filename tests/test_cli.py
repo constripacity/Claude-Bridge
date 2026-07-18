@@ -3,8 +3,48 @@ and env-var wiring. The actual `uvicorn.run` is monkeypatched so no socket is
 bound; we only assert what the CLI hands it."""
 
 import os
+import subprocess
+import sys
 
 import claude_bridge.cli as cli
+
+
+# ── Regression: config-init ordering (the v0.9.1 auth-bypass bug) ────────────
+# These run in subprocesses because sys.modules is process-global and other
+# tests in the suite import claude_bridge.server, which would pollute an
+# in-process check.
+
+
+def test_importing_package_does_not_import_server():
+    """Importing the package (which the console entry point does to read
+    --version) must NOT import the server. If it does, the server snapshots its
+    env-derived config before cli.main() applies the flags, silently turning
+    --auth-token/--db/--no-dashboard/etc. into no-ops."""
+    code = (
+        "import claude_bridge, sys; "
+        "assert 'claude_bridge.server' not in sys.modules, "
+        "'server imported at package import — CLI flags would be no-ops'"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_cli_flag_env_is_seen_by_the_server():
+    """End-to-end ordering: the package is imported first (as the --version path
+    does), then the auth-token env var is set (as cli.main() does for
+    --auth-token), then the server is imported. The server must pick the token
+    up — proving the flag is effective."""
+    code = (
+        "import os, sys\n"
+        "import claude_bridge\n"
+        "assert 'claude_bridge.server' not in sys.modules\n"
+        "os.environ['CLAUDE_BRIDGE_AUTH_TOKEN'] = 'secret'\n"
+        "os.environ['CLAUDE_BRIDGE_DB'] = ':memory:'\n"
+        "import claude_bridge.server as s\n"
+        "assert s.AUTH_TOKEN == 'secret', 'auth-token flag ineffective (config frozen too early)'\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
 
 
 # ── TLS validation (no server start needed) ─────────────────────────────────

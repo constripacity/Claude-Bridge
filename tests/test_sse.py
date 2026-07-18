@@ -65,7 +65,7 @@ async def drain(agen) -> list[dict]:
 
 @pytest.fixture
 def client(fresh_db):
-    return TestClient(bridge.app)
+    return TestClient(bridge.app, base_url="http://localhost")
 
 
 # ── 1. Subscribe + receive end-to-end (broker) ─────────────────────────────
@@ -193,13 +193,14 @@ async def test_auth_header_required_when_token_set(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_auth_via_query_param_for_events(client, monkeypatch):
+async def test_query_tokens_are_rejected_for_events(client, monkeypatch):
     monkeypatch.setattr(bridge, "AUTH_TOKEN", "s3cret-abc")
     monkeypatch.setattr(bridge, "MAX_SSE_PER_CHANNEL", 0)
 
     assert client.get("/events/channel/demo:c?token=wrong").status_code == 401
-    # Correct query-param token accepted on /events/ → 503 from the zeroed cap.
-    assert client.get("/events/channel/demo:c?token=s3cret-abc").status_code == 503
+    # Even the correct master token is rejected in a URL. Dashboard streams
+    # authenticate with an opaque HttpOnly session cookie instead.
+    assert client.get("/events/channel/demo:c?token=s3cret-abc").status_code == 401
 
     # Query-param token must NOT work on non-/events/ paths — the bypass is
     # deliberately scoped narrow to limit the access-log leak surface.

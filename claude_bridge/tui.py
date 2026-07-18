@@ -1,7 +1,7 @@
 """Claude Bridge — Terminal UI.
 
 A Textual-based command-line companion to the web dashboard. Connects to the
-same HTTP API exposed by the bridge (defaults to http://localhost:8765) and
+same HTTP API exposed by the bridge (defaults to http://127.0.0.1:8765) and
 provides a live view of channels, messages, an inspector, and a send composer.
 
 Usage:
@@ -52,7 +52,7 @@ from .tui_client import (
 
 
 POLL_INTERVAL = 2.0
-DEFAULT_URL = "http://localhost:8765"
+DEFAULT_URL = "http://127.0.0.1:8765"
 
 
 def _short_uptime(seconds: int) -> str:
@@ -483,11 +483,18 @@ class BridgeTUI(App):
     filter_text: reactive[str] = reactive("")
     inspector_visible: reactive[bool] = reactive(True)
 
-    def __init__(self, url: str, sender: str, token: str | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        sender: str,
+        token: str | None = None,
+        trust_env: bool = False,
+    ) -> None:
         super().__init__()
         self._url = url
         self._sender = sender
         self._token = token
+        self._trust_env = trust_env
         self._auth_warned = False
         self._client: BridgeClient | None = None
         self._last_seen_id: dict[str, str] = {}      # channel -> last msg id polled
@@ -519,7 +526,9 @@ class BridgeTUI(App):
         yield Footer()
 
     async def on_mount(self) -> None:
-        self._client = BridgeClient(self._url, token=self._token)
+        self._client = BridgeClient(
+            self._url, token=self._token, trust_env=self._trust_env
+        )
         topbar = self.query_one(TopBar)
         topbar.set_state(online=True, url=self._url, uptime="—", n_channels=0, n_messages=0)
         inspector = self.query_one(Inspector)
@@ -833,10 +842,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--token", default=None,
                    help="Bearer auth token for the bridge. Also reads CLAUDE_BRIDGE_AUTH_TOKEN env var; "
                         "the CLI flag wins. Leave unset for a bridge without auth.")
+    p.add_argument(
+        "--trust-env",
+        action="store_true",
+        help="Use HTTP(S)/SOCKS proxy variables from the environment. Disabled by default "
+             "so local and tailnet bridge traffic cannot be redirected unexpectedly.",
+    )
     args = p.parse_args(argv)
 
     token = args.token or os.environ.get("CLAUDE_BRIDGE_AUTH_TOKEN") or None
-    app = BridgeTUI(url=args.url, sender=args.sender, token=token)
+    app = BridgeTUI(
+        url=args.url,
+        sender=args.sender,
+        token=token,
+        trust_env=args.trust_env,
+    )
     app.run()
     return 0
 

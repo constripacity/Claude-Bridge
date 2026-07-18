@@ -1,5 +1,9 @@
-"""Claude Bridge — real-time cross-machine MCP relay for Claude Code agents."""
+"""Claude Bridge — a vendor-neutral relay for coding agents.
 
-from .server import VERSION as __version__, app
+Importing the package deliberately has no server side effects.  Applications
+that need the ASGI object should import ``claude_bridge.server:app`` directly.
+"""
 
-__all__ = ["__version__", "app"]
+from ._version import VERSION as __version__
+
+__all__ = ["__version__"]

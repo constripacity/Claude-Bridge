@@ -1,5 +1,7 @@
 // Shared atoms used across artboards: icons, dots, pills, code formatter.
 
+import React from 'react';
+
 const Icon = ({ name, size = 16, stroke = 1.5, color = 'currentColor' }) => {
   const paths = {
     plus:    <path d="M8 3v10M3 8h10" />,
@@ -159,7 +161,7 @@ const BridgeMark = ({ size = 24, color = 'var(--blue)' }) => (
   </svg>
 );
 
-Object.assign(window, {
+export {
   Icon, LiveDot, Eyebrow, SenderPill, HighlightedJson, ChromeLabel,
   BridgeMark, SENDER_COLORS,
-});
+};

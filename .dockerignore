@@ -10,7 +10,20 @@ __pycache__
 .pytest-tmp
 dist
 build
+node_modules
+uv.lock
 *.egg-info
+
+# Local secrets and agent state must never enter Docker layers or cache.
+.env
+.env.*
+.claude
+.codex
+.agents
+.npmrc
+.pypirc
+*.key
+*.pem
 
 # Local runtime state — never bake a host's messages into an image.
 *.db

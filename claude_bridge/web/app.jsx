@@ -1,224 +1,414 @@
-// Top-level orchestrator: polls /api/state + /api/messages, renders
-// DashboardDesktop or DashboardMobile depending on viewport.
+// Top-level dashboard orchestrator. API requests authenticate with a short-lived,
+// HttpOnly session cookie; the bearer token is only held for the duration of the
+// POST /api/session request and is never written to browser storage or a URL.
 
-const { useState, useEffect, useRef, useCallback } = React;
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+
+import DashboardDesktop from './dashboard-desktop.jsx';
+import DashboardMobile from './dashboard-mobile.jsx';
 
 const POLL_MS = 2000;
 const MOBILE_MAX = 640;
 
-const TOKEN_KEY = 'claude-bridge:auth-token';
-
-function getToken() {
-  try { return localStorage.getItem(TOKEN_KEY) || null; } catch (_) { return null; }
+class AuthError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'AuthError';
+  }
 }
 
-function setToken(t) {
-  try {
-    if (t) localStorage.setItem(TOKEN_KEY, t);
-    else   localStorage.removeItem(TOKEN_KEY);
-  } catch (_) {}
+const authListeners = new Set();
+let authenticationPromise = null;
+let authenticationBlocked = false;
+
+function publishAuthState(active, required = !active) {
+  for (const listener of authListeners) listener({ active, required });
 }
 
 function promptForToken() {
   const entered = window.prompt(
-    'This bridge requires an auth token.\n\n' +
-    'Paste the CLAUDE_BRIDGE_AUTH_TOKEN value (or the --auth-token CLI value) ' +
-    'used when the bridge was started:',
+    'This bridge requires authentication.\n\n' +
+    'Paste the CLAUDE_BRIDGE_AUTH_TOKEN value (or the --auth-token CLI value). ' +
+    'It will be exchanged for an HttpOnly browser session and will not be stored:',
     '',
   );
-  if (entered && entered.trim()) {
-    setToken(entered.trim());
-    return entered.trim();
+  return entered?.trim() || null;
+}
+
+async function createBrowserSession(token) {
+  const response = await fetch('/api/session', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Accept': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: '{}',
+  });
+
+  if (response.status === 401) throw new AuthError('Bridge rejected that token');
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`${response.status} ${response.statusText}: ${body}`);
   }
-  return null;
 }
 
-class AuthError extends Error {
-  constructor(msg) { super(msg); this.name = 'AuthError'; }
+async function restoreBrowserSession() {
+  // GET is deliberately sent without a bearer header. A valid HttpOnly cookie
+  // authenticates it; a 401 simply means the normal sign-in flow must run.
+  // The response also distinguishes an auth-disabled local bridge.
+  const response = await fetch('/api/session', {
+    credentials: 'same-origin',
+    headers: { 'Accept': 'application/json' },
+  });
+  if (response.status === 401) {
+    publishAuthState(false, true);
+    return false;
+  }
+  if (!response.ok) return false;
+  const result = await response.json().catch(() => ({}));
+  const authRequired = Boolean(result.auth_required);
+  const active = authRequired && Boolean(result.authenticated);
+  publishAuthState(active, authRequired && !active);
+  return Boolean(result.authenticated);
 }
 
-async function fetchJson(url, opts = {}, { retryOn401 = true } = {}) {
-  const token = getToken();
-  const headers = { ...(opts.headers || {}) };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(url, { ...opts, headers });
-  if (res.status === 401) {
-    if (retryOn401) {
-      setToken(null);
-      const next = promptForToken();
-      if (next) return fetchJson(url, opts, { retryOn401: false });
+async function authenticate({ force = false } = {}) {
+  if (authenticationPromise) return authenticationPromise;
+  if (authenticationBlocked && !force) {
+    throw new AuthError('Authentication required');
+  }
+
+  authenticationPromise = (async () => {
+    const token = promptForToken();
+    if (!token) {
+      authenticationBlocked = true;
+      publishAuthState(false, true);
+      throw new AuthError('Authentication cancelled');
     }
-    throw new AuthError('Bridge rejected token');
+
+    try {
+      await createBrowserSession(token);
+      authenticationBlocked = false;
+      publishAuthState(true, false);
+    } catch (error) {
+      authenticationBlocked = true;
+      publishAuthState(false, true);
+      throw error;
+    }
+  })();
+
+  try {
+    return await authenticationPromise;
+  } finally {
+    authenticationPromise = null;
   }
-  if (!res.ok) {
-    let body = '';
-    try { body = await res.text(); } catch (_) {}
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+}
+
+async function fetchJson(url, options = {}, { retryOn401 = true } = {}) {
+  const headers = {
+    'Accept': 'application/json',
+    ...(options.headers || {}),
+  };
+  const response = await fetch(url, {
+    ...options,
+    credentials: 'same-origin',
+    headers,
+  });
+
+  if (response.status === 401) {
+    if (retryOn401) {
+      await authenticate();
+      return fetchJson(url, options, { retryOn401: false });
+    }
+    publishAuthState(false, true);
+    throw new AuthError('Browser session was rejected');
   }
-  return res.json();
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`${response.status} ${response.statusText}: ${body}`);
+  }
+  if (response.status === 204) return null;
+  return response.json();
 }
 
 function useViewport() {
-  const [w, setW] = useState(typeof window !== 'undefined' ? window.innerWidth : 1280);
+  const [width, setWidth] = useState(window.innerWidth);
   useEffect(() => {
-    const onResize = () => setW(window.innerWidth);
+    const onResize = () => setWidth(window.innerWidth);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
-  return w;
+  return width;
 }
 
-function useInterval(fn, ms) {
-  const savedRef = useRef(fn);
-  useEffect(() => { savedRef.current = fn; }, [fn]);
+function useInterval(callback, milliseconds) {
+  const savedRef = useRef(callback);
+  useEffect(() => { savedRef.current = callback; }, [callback]);
   useEffect(() => {
-    if (ms == null) return;
-    const id = setInterval(() => savedRef.current(), ms);
-    return () => clearInterval(id);
-  }, [ms]);
+    if (milliseconds == null) return undefined;
+    const id = window.setInterval(() => savedRef.current(), milliseconds);
+    return () => window.clearInterval(id);
+  }, [milliseconds]);
 }
 
 function defaultSender() {
-  const ua = (navigator.userAgent || '').toLowerCase();
-  if (ua.includes('mac'))     return 'mac';
-  if (ua.includes('linux'))   return 'linux';
-  if (ua.includes('windows')) return 'windows';
+  const userAgent = (navigator.userAgent || '').toLowerCase();
+  if (userAgent.includes('mac')) return 'mac';
+  if (userAgent.includes('linux')) return 'linux';
+  if (userAgent.includes('windows')) return 'windows';
   return 'dashboard';
 }
 
-function App() {
-  const [state, setState]               = useState(null);
-  const [activeChannel, setActiveChannel] = useState(
-    () => localStorage.getItem('bridge.activeChannel') || null
+function normalizeFeedMessage(message) {
+  const content = typeof message.content === 'string' ? message.content : '';
+  const timestamp = message.ts_full || message.timestamp || '';
+  const preview = message.preview ?? (
+    content.length <= 200 ? content : `${content.slice(0, 200)}…`
   );
-  const [messages, setMessages]         = useState([]);
-  const [selectedMsg, setSelectedMsg]   = useState(null);
-  const [detail, setDetail]             = useState(null);
-  const [err, setErr]                   = useState(null);
-  const [hasToken, setHasToken]         = useState(() => !!getToken());
+  const trimmed = content.trim();
+  let isJson = message.is_json ?? false;
+  if (message.is_json == null && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+    try {
+      JSON.parse(trimmed);
+      isJson = true;
+    } catch (_) {
+      isJson = false;
+    }
+  }
+  return {
+    ...message,
+    ts: message.ts || (timestamp ? timestamp.slice(11, 19) : ''),
+    ts_full: timestamp,
+    preview,
+    is_json: isJson,
+  };
+}
 
-  const clearToken = useCallback(() => {
-    if (!confirm('Clear stored bridge token? You will be re-prompted on the next request.')) return;
-    setToken(null);
-    setHasToken(false);
-  }, []);
+function mergeMessages(...collections) {
+  const byId = new Map();
+  for (const collection of collections) {
+    for (const raw of collection || []) {
+      const message = normalizeFeedMessage(raw);
+      if (message.id) byId.set(message.id, message);
+    }
+  }
+  return [...byId.values()].sort((left, right) => left.seq - right.seq);
+}
+
+function readActiveChannel() {
+  try {
+    return localStorage.getItem('bridge.activeChannel') || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function storeActiveChannel(channel) {
+  try {
+    localStorage.setItem('bridge.activeChannel', channel);
+  } catch (_) {}
+}
+
+function App() {
+  const [state, setState] = useState(null);
+  const [activeChannel, setActiveChannel] = useState(readActiveChannel);
+  const [messages, setMessages] = useState([]);
+  const [selectedMsg, setSelectedMsg] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [error, setError] = useState(null);
+  const [authState, setAuthState] = useState({ active: false, required: false });
 
   const width = useViewport();
   const sender = defaultSender();
+  const eventSourceRef = useRef(null);
 
-  // ── Auto-select first channel once we know about any ────────────────────
+  useEffect(() => {
+    authListeners.add(setAuthState);
+    return () => authListeners.delete(setAuthState);
+  }, []);
+
   useEffect(() => {
     if (!activeChannel && state?.channels?.length) {
       const first = state.channels[0].id;
       setActiveChannel(first);
-      localStorage.setItem('bridge.activeChannel', first);
+      storeActiveChannel(first);
     }
   }, [state, activeChannel]);
 
-  // ── Poll /api/state (keep polling — channel list, counts, uptime) ────────
   const refreshState = useCallback(async () => {
     try {
-      const s = await fetchJson('/api/state');
-      setState(s);
-      setErr(null);
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      // Keep auth badge in sync with whatever fetchJson stored after prompts
-      setHasToken(!!getToken());
+      const nextState = await fetchJson('/api/state');
+      setState(nextState);
+      setError(null);
+    } catch (caught) {
+      setError(String(caught));
     }
-  }, []);
-  useEffect(() => { refreshState(); }, [refreshState]);
-  useInterval(refreshState, POLL_MS);
-
-  // ── Live event stream for the active channel (replaces messages poll) ────
-  // One-shot /api/messages for initial backlog, then EventSource for live
-  // updates. /api/state poll is unchanged — it covers channel list + counts.
-  const esRef = useRef(null);
-
-  const fetchBacklog = useCallback((channel) => {
-    fetchJson(`/api/messages?channel=${encodeURIComponent(channel)}&limit=100`)
-      .then(data => setMessages(data.messages || []))
-      .catch(e => setErr(String(e)));
   }, []);
 
   useEffect(() => {
-    if (esRef.current) { esRef.current.close(); esRef.current = null; }
-    if (!activeChannel) { setMessages([]); return; }
+    restoreBrowserSession()
+      .catch(() => false)
+      .finally(refreshState);
+  }, [refreshState]);
+  useInterval(
+    refreshState,
+    authState.required && !authState.active ? null : POLL_MS,
+  );
 
-    fetchBacklog(activeChannel);
-
-    const token = getToken();
-    const url = `/events/channel/${encodeURIComponent(activeChannel)}` +
-      (token ? `?token=${encodeURIComponent(token)}` : '');
-    const es = new EventSource(url);
-    esRef.current = es;
-
-    es.addEventListener('message', (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg]);
-      } catch (_) {}
-    });
-
-    es.addEventListener('clear', () => {
-      setMessages([]);
-      setSelectedMsg(null);
-      setDetail(null);
-    });
-
-    // cursor_stale or replay_truncated: our resume point is gone or overflow —
-    // re-sync from /api/messages without a cursor.
-    es.addEventListener('cursor_stale',      () => fetchBacklog(activeChannel));
-    es.addEventListener('replay_truncated',  () => fetchBacklog(activeChannel));
-
-    es.addEventListener('error', () => {
-      setErr('Event stream error — reconnecting…');
-    });
-
-    return () => { es.close(); esRef.current = null; };
-  }, [activeChannel, fetchBacklog]);
-
-  // ── Auto-select latest message on channel switch / first load ───────────
-  useEffect(() => {
-    if (!selectedMsg && messages.length) {
-      const latest = messages[messages.length - 1];
-      handleSelectMessage(latest);
-    }
-    // If selected msg no longer in feed (channel switch), clear it
-    if (selectedMsg && !messages.some(m => m.id === selectedMsg.id)) {
-      setSelectedMsg(null);
-      setDetail(null);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages]);
-
-  // ── Fetch detail for selected message ───────────────────────────────────
-  const handleSelectMessage = useCallback(async (m) => {
-    setSelectedMsg(m);
-    if (!m) { setDetail(null); return; }
+  const handleSignIn = useCallback(async () => {
     try {
-      const d = await fetchJson(`/api/messages/${m.id}`);
-      setDetail(d);
-    } catch (e) {
-      setErr(String(e));
+      await authenticate({ force: true });
+      await refreshState();
+      setError(null);
+    } catch (caught) {
+      setError(String(caught));
     }
-  }, []);
+  }, [refreshState]);
 
-  const handleSelectChannel = useCallback((id) => {
-    setActiveChannel(id);
-    localStorage.setItem('bridge.activeChannel', id);
+  const handleSignOut = useCallback(async () => {
+    if (!window.confirm('End this dashboard session?')) return;
+    try {
+      const response = await fetch('/api/session', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!response.ok && response.status !== 401) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+    } catch (caught) {
+      setError(String(caught));
+      return;
+    }
+
+    authenticationBlocked = true;
+    publishAuthState(false, true);
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    setState(null);
+    setMessages([]);
     setSelectedMsg(null);
     setDetail(null);
   }, []);
 
-  const handleSend = useCallback(async ({ channel, sender, content }) => {
+  // Fetch a stable backlog, then resume the stream from its newest cursor.
+  // Anything written between those two operations is replayed by the server,
+  // and duplicate ids are collapsed client-side.
+  useEffect(() => {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    setSelectedMsg(null);
+    setDetail(null);
+
+    if (!activeChannel) {
+      setMessages([]);
+      return undefined;
+    }
+    if (authState.required && !authState.active) {
+      setMessages([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let eventSource = null;
+
+    const fetchBacklog = async () => {
+      const data = await fetchJson(
+        `/api/messages?channel=${encodeURIComponent(activeChannel)}&limit=100`,
+      );
+      const backlog = (data.messages || []).map(normalizeFeedMessage);
+      if (!cancelled) {
+        setMessages(backlog);
+      }
+      return {
+        backlog,
+        cursor: data.next_cursor || data.cursor || backlog[backlog.length - 1]?.id || null,
+      };
+    };
+
+    const connect = async () => {
+      try {
+        const { cursor } = await fetchBacklog();
+        if (cancelled) return;
+
+        const parameters = cursor ? `?since_id=${encodeURIComponent(cursor)}` : '';
+        const url = `/events/channel/${encodeURIComponent(activeChannel)}${parameters}`;
+        eventSource = new EventSource(url, { withCredentials: true });
+        eventSourceRef.current = eventSource;
+
+        eventSource.addEventListener('open', () => {
+          if (!cancelled) setError(null);
+        });
+        eventSource.addEventListener('message', event => {
+          try {
+            const message = normalizeFeedMessage(JSON.parse(event.data));
+            if (!cancelled) setMessages(previous => mergeMessages(previous, [message]));
+          } catch (_) {}
+        });
+        eventSource.addEventListener('clear', () => {
+          if (cancelled) return;
+          setMessages([]);
+          setSelectedMsg(null);
+          setDetail(null);
+        });
+        eventSource.addEventListener('cursor_stale', () => {
+          fetchBacklog().catch(caught => setError(String(caught)));
+        });
+        eventSource.addEventListener('replay_truncated', () => {
+          fetchBacklog().catch(caught => setError(String(caught)));
+        });
+        eventSource.addEventListener('error', () => {
+          if (!cancelled) setError('Event stream interrupted — reconnecting…');
+        });
+      } catch (caught) {
+        if (!cancelled) setError(String(caught));
+      }
+    };
+
+    connect();
+    return () => {
+      cancelled = true;
+      eventSource?.close();
+      if (eventSourceRef.current === eventSource) eventSourceRef.current = null;
+    };
+  }, [activeChannel, authState.active, authState.required]);
+
+  const handleSelectMessage = useCallback(async message => {
+    setSelectedMsg(message);
+    if (!message) {
+      setDetail(null);
+      return;
+    }
+    try {
+      const nextDetail = await fetchJson(`/api/messages/${message.id}`);
+      setDetail(nextDetail);
+    } catch (caught) {
+      setError(String(caught));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedMsg && messages.length) {
+      handleSelectMessage(messages[messages.length - 1]);
+    } else if (selectedMsg && !messages.some(message => message.id === selectedMsg.id)) {
+      setSelectedMsg(null);
+      setDetail(null);
+    }
+  }, [messages, selectedMsg, handleSelectMessage]);
+
+  const handleSelectChannel = useCallback(channel => {
+    setActiveChannel(channel);
+    storeActiveChannel(channel);
+  }, []);
+
+  const handleSend = useCallback(async ({ channel, sender: from, content }) => {
     await fetchJson('/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel, sender, content }),
+      body: JSON.stringify({ channel, sender: from, content }),
     });
-    // Message arrives via EventSource; refresh state for channel count update.
     await refreshState();
   }, [refreshState]);
 
@@ -227,10 +417,9 @@ function App() {
       'New channel name (convention: project:role — e.g. demo:orchestrator):',
       'demo:orchestrator',
     );
-    if (!raw) return;
-    const name = raw.trim();
+    const name = raw?.trim();
     if (!name) return;
-    // Channels come into existence on first write — drop a hello marker.
+
     const hello = JSON.stringify({
       type: 'hello',
       from: sender,
@@ -242,27 +431,24 @@ function App() {
       body: JSON.stringify({ channel: name, sender, content: hello }),
     });
     setActiveChannel(name);
-    localStorage.setItem('bridge.activeChannel', name);
-    setSelectedMsg(null);
-    setDetail(null);
+    storeActiveChannel(name);
     await refreshState();
   }, [sender, refreshState]);
 
-  const handleClear = useCallback(async (channel) => {
-    if (!confirm(`Clear ALL messages from "${channel}"? This cannot be undone.`)) return;
+  const handleClear = useCallback(async channel => {
+    if (!window.confirm(`Clear ALL messages from "${channel}"? This cannot be undone.`)) return;
     await fetchJson('/api/clear', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel }),
     });
-    // `clear` SSE event handles setMessages([])/setSelectedMsg/setDetail;
-    // refresh state for the channel count.
     await refreshState();
   }, [refreshState]);
 
-  const channelMeta = (state?.channels || []).find(c => c.id === activeChannel) || null;
-
-  const Dashboard = width <= MOBILE_MAX ? window.DashboardMobile : window.DashboardDesktop;
+  const channelMeta = (state?.channels || []).find(
+    channel => channel.id === activeChannel,
+  ) || null;
+  const Dashboard = width <= MOBILE_MAX ? DashboardMobile : DashboardDesktop;
 
   return (
     <div style={{ width: '100vw', height: '100vh', background: 'var(--bg-base)' }}>
@@ -280,7 +466,8 @@ function App() {
         onNewChannel={handleNewChannel}
         defaultSender={sender}
       />
-      {err && (
+
+      {error && (
         <div style={{
           position: 'fixed', bottom: 12, right: 12, maxWidth: 360,
           background: 'rgba(248, 81, 73, 0.12)',
@@ -289,10 +476,25 @@ function App() {
           fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)',
           zIndex: 100,
         }}>
-          {err}
+          {error}
         </div>
       )}
-      {hasToken && (
+
+      {authState.required && !authState.active && (
+        <button
+          onClick={handleSignIn}
+          style={{
+            position: 'fixed', top: 12, right: 12,
+            background: 'rgba(88, 166, 255, 0.14)',
+            border: '1px solid rgba(88, 166, 255, 0.5)',
+            borderRadius: 6, padding: '5px 10px',
+            fontFamily: 'var(--mono)', fontSize: 11,
+            color: 'var(--blue)', cursor: 'pointer', zIndex: 100,
+          }}
+        >Sign in</button>
+      )}
+
+      {authState.active && (
         <div style={{
           position: 'fixed', top: 12, right: 12,
           background: 'rgba(63, 185, 80, 0.12)',
@@ -301,20 +503,21 @@ function App() {
           fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)',
           display: 'flex', alignItems: 'center', gap: 8, zIndex: 100,
         }}>
-          <span>Auth ✓</span>
+          <span>Session ✓</span>
           <button
-            onClick={clearToken}
+            onClick={handleSignOut}
             style={{
-              background: 'transparent', border: '1px solid rgba(63, 185, 80, 0.4)',
+              background: 'transparent',
+              border: '1px solid rgba(63, 185, 80, 0.4)',
               borderRadius: 4, padding: '1px 6px', color: 'var(--green)',
               fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer',
             }}
-            title="Clear stored bridge token"
-          >clear</button>
+            title="End dashboard session"
+          >logout</button>
         </div>
       )}
     </div>
   );
 }
 
-window.App = App;
+export default App;

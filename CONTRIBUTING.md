@@ -1,38 +1,137 @@
 # Contributing to Claude Bridge
 
-Thanks for your interest. Claude Bridge is intentionally small and focused —
-contributions that keep it that way are most welcome.
+Claude Bridge is deliberately small: a dependable message transport for
+independent agents, not an agent framework. Contributions are welcome when
+they preserve that boundary and include evidence for the behavior they add.
 
-## What we want
+## Before opening a pull request
 
-- Bug fixes
-- Better error messages
-- Improved docs or examples
-- New transport options (stdio, WebSocket)
-- Optional SQLite persistence layer
-- Auth token support
+- Use an issue for a substantial feature or protocol change so its scope and
+  compatibility story can be agreed first.
+- Search existing issues and the [roadmap](docs/ROADMAP.md).
+- Report vulnerabilities privately using [SECURITY.md](SECURITY.md), never in a
+  public issue or pull request.
+- Do not include real Bearer tokens, private channel content, personal paths,
+  or production databases in fixtures and logs.
 
-## What we don't want
+Good contributions include:
 
-- Heavy dependencies
-- Features that duplicate what Claude Code already does natively
-- Breaking changes to the MCP tool interface
+- correctness and security fixes;
+- protocol and vendor-client compatibility tests;
+- clearer setup diagnostics and actionable errors;
+- bounded reliability improvements;
+- accessible dashboard/TUI improvements;
+- reproducible benchmarks; and
+- documentation tied to behavior that exists or is explicitly marked planned.
 
-## How to contribute
+Changes that need strong justification include:
 
-1. Fork the repo and create a branch: `git checkout -b fix/your-fix`
-2. Editable install with dev deps: `pip install -e .[dev]`
-3. Make your changes under `claude_bridge/`
-4. Run `ruff check claude_bridge tests/` — keep it clean
-5. Run `pytest -v` — keep all tests green
-6. Open a PR with a clear description of what changed and why
+- heavy or hosted runtime dependencies;
+- orchestration, planning, or arbitrary command execution;
+- breaking MCP tool or stored-message changes;
+- a second persistence backend without a demonstrated deployment need; and
+- vendor-support claims without a reproducible compatibility report.
 
-## Ground rules
+## Set up a development environment
 
-- Keep the runtime small. The bridge is a relay, not an orchestrator — heavy dependencies or feature creep should be argued for, not assumed.
-- Don't add auth by default — keep the default path simple, opt-in complexity.
-- Test against Python 3.10+.
+Python 3.10–3.13 are supported.
 
-## Questions
+```bash
+git clone https://github.com/constripacity/Claude-Bridge.git
+cd Claude-Bridge
+python -m venv .venv
+python -m pip install -e ".[dev]"
+```
 
-Open an issue. We respond fast.
+Activate the virtual environment using the command appropriate for your shell.
+Do not commit `.venv`, local SQLite databases, or generated credentials.
+
+## Make a focused change
+
+1. Branch from current `main`.
+2. Keep unrelated formatting or refactors out of the patch.
+3. Add a regression test before or with every bug fix.
+4. Update `CHANGELOG.md` for user-visible behavior.
+5. Update protocol, compatibility, security, and README documentation when the
+   public contract changes.
+6. Preserve legacy string messages unless a formally documented major-version
+   migration says otherwise.
+
+## Run the checks
+
+```bash
+ruff check claude_bridge tests
+pytest -v
+python -m build
+```
+
+For package or CLI changes, also install the built wheel into a clean virtual
+environment and run:
+
+```bash
+claude-bridge --version
+claude-bridge --help
+```
+
+For network or transport changes, cover both the normal flow and rejection
+paths. Examples include invalid Host and Origin headers, absent auth, chunked
+oversize bodies, stale/cross-channel cursors, duplicate idempotency keys,
+timeouts, disconnects, and session shutdown.
+
+CI runs Linux across Python 3.10–3.13 and current Python smoke jobs on Windows
+and macOS. It also builds and installs both package artifact types. A local
+pass on one platform does not replace the matrix.
+
+## Compatibility evidence
+
+Use the terms in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md):
+
+- **protocol-tested** for an automated complete MCP SDK exchange;
+- **implementation-tested** for adapter/unit coverage;
+- **manually reported** for a recorded external-client run; and
+- **unverified** when compatibility is inferred only from documentation.
+
+A manual report should include client and bridge versions, OS, transport,
+authentication/TLS mode, and redacted initialization/tool-call results. Never
+upgrade “expected compatible” to “verified” based only on matching protocol
+names.
+
+## Protocol rules
+
+- Server sequence is the source of message ordering.
+- Cursors and acknowledgements are scoped to both consumer and channel.
+- A retry key is scoped to channel and sender and cannot be reused for a
+  different payload.
+- Unknown future envelopes remain observable as raw content.
+- Acknowledgement is monotonic and supplies an at-least-once building block,
+  not exactly-once external side effects.
+- Received content remains untrusted input.
+
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the complete contract.
+
+## Pull-request description
+
+Please include:
+
+- the problem and why it belongs in the bridge;
+- the behavior before and after;
+- compatibility or migration impact;
+- security and privacy impact;
+- tests run and their results; and
+- screenshots only when visual behavior changed.
+
+Keep commits reviewable. Maintainers may ask for a large feature to be split
+into a protocol/contract change and one or more implementation changes.
+
+## Release discipline
+
+- Do not edit a released tag.
+- The package version, changelog, registry manifest, and container tags must
+  agree for a stable release.
+- Pre-release features must not be described as stable.
+- Publishing should use short-lived trusted credentials and should never run
+  with secrets for untrusted pull requests.
+- Deprecations need a replacement, a migration example, and at least one
+  documented compatibility window.
+
+Questions and small proposals can be opened as GitHub issues.

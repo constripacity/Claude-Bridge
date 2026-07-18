@@ -8,7 +8,7 @@ import claude_bridge.server as bridge
 
 @pytest.fixture
 def client(fresh_db):
-    return TestClient(bridge.app)
+    return TestClient(bridge.app, base_url="http://localhost")
 
 
 TOKEN = "s3cret-abc"
@@ -173,15 +173,15 @@ def test_normal_send_unaffected(client):
     assert r.status_code == 200
 
 
-# ── CORS: localhost-only by default ────────────────────────────────────────
+# ── CORS: same-origin by default ───────────────────────────────────────────
 
-def test_cors_default_allows_localhost(client):
-    """Default CORS config accepts requests claiming a localhost origin."""
+def test_cors_default_rejects_cross_port_localhost(client):
+    """A separate local web app needs an explicit --cors-origin opt-in."""
     r = client.options("/api/state", headers={
         "Origin": "http://localhost:3000",
         "Access-Control-Request-Method": "GET",
     })
-    assert r.headers.get("access-control-allow-origin") == "http://localhost:3000"
+    assert r.headers.get("access-control-allow-origin") != "http://localhost:3000"
 
 
 def test_cors_default_rejects_external_origin(client):

@@ -8,7 +8,7 @@ import claude_bridge.server as bridge
 
 @pytest.fixture
 def client(fresh_db):
-    return TestClient(bridge.app)
+    return TestClient(bridge.app, base_url="http://localhost")
 
 
 def _audit_rows(event: str | None = None):
@@ -99,6 +99,10 @@ def test_audit_records_oversize_reject(client, monkeypatch):
 
 
 def test_api_audit_reports_disabled(client, monkeypatch):
+    bridge.db().execute(
+        "INSERT INTO audit(timestamp, event) VALUES (?, ?)",
+        ("2026-07-18T00:00:00Z", "historical"),
+    )
     monkeypatch.setattr(bridge, "AUDIT_ENABLED", False)
     r = client.get("/api/audit")
     assert r.status_code == 200
@@ -126,3 +130,24 @@ def test_failing_audit_hook_does_not_break_rejection(client, monkeypatch):
 
     # Unauthenticated → 401, even though the audit hook raises underneath.
     assert client.get("/api/state").status_code == 401
+
+
+def test_failing_post_commit_audit_does_not_fail_mutation(client, monkeypatch):
+    monkeypatch.setattr(bridge, "AUDIT_ENABLED", True)
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("audit store exploded")
+
+    monkeypatch.setattr(bridge, "record_audit", boom)
+    sent = client.post(
+        "/api/send",
+        json={"channel": "audit:c", "sender": "sender", "content": "durable"},
+    )
+    assert sent.status_code == 200
+    assert bridge.db().execute(
+        "SELECT COUNT(*) FROM messages WHERE channel = 'audit:c'"
+    ).fetchone()[0] == 1
+
+    cleared = client.post("/api/clear", json={"channel": "audit:c"})
+    assert cleared.status_code == 200
+    assert cleared.json()["cleared"] == 1

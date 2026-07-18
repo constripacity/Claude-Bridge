@@ -9,7 +9,7 @@ import claude_bridge.server as bridge
 @pytest.fixture
 def client(fresh_db):
     """TestClient against the live ASGI app, with the per-test SQLite fixture."""
-    return TestClient(bridge.app)
+    return TestClient(bridge.app, base_url="http://localhost")
 
 
 # ── /status (existing, but version field is new) ─────────────────────────────

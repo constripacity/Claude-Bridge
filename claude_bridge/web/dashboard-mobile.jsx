@@ -1,6 +1,16 @@
 // Mobile dashboard — 390×844-ish. Live-data props version.
 // Same prop bag as DashboardDesktop.
 
+import React from 'react';
+import {
+  BridgeMark,
+  Eyebrow,
+  HighlightedJson,
+  Icon,
+  LiveDot,
+  SenderPill,
+} from './shared.jsx';
+
 function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
   return (
     <div style={{
@@ -277,4 +287,4 @@ function DashboardMobile(props) {
   );
 }
 
-window.DashboardMobile = DashboardMobile;
+export default DashboardMobile;

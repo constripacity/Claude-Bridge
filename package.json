@@ -1,0 +1,14 @@
+{
+  "name": "claude-bridge-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Reproducible build tooling for the self-hosted Claude Bridge dashboard",
+  "scripts": {
+    "build:dashboard": "esbuild claude_bridge/web/main.jsx --bundle --minify --target=es2020 --define:process.env.NODE_ENV=\"'production'\" --legal-comments=none --outfile=claude_bridge/web/app.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

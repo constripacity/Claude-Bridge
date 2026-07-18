@@ -14,8 +14,8 @@ here purely as reference — they are **not** the live dashboard.
 | `shared.jsx`            | Icons, sender pills, JSON highlighter, brand mark |
 | `design-canvas.jsx`     | The canvas/artboard framework |
 
-The **live** dashboard lives in [`/web`](../../web/) and is served by
-`server.py` at `http://localhost:8765/`. It reuses the same visual language
+The **live** dashboard lives in [`claude_bridge/web`](../../claude_bridge/web/)
+and is served by `server.py` at `http://127.0.0.1:8765/`. It reuses the same visual language
 but is wired to real `/api/state`, `/api/messages`, `/api/send`, and
 `/api/clear` endpoints.
 

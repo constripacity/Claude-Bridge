@@ -2,432 +2,429 @@
 
 <!-- mcp-name: io.github.constripacity/claude-code-bridge -->
 
-**Real-time cross-machine communication for Claude Code agents.**
+**A local-first, cross-machine message bus for independent coding agents.**
 
-![CI](https://github.com/constripacity/claude-bridge/actions/workflows/ci.yml/badge.svg)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+[![CI](https://github.com/constripacity/Claude-Bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/constripacity/Claude-Bridge/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![MCP](https://img.shields.io/badge/MCP-compatible-orange)
+![MCP](https://img.shields.io/badge/MCP-Streamable_HTTP-orange)
 
----
+Claude Bridge lets coding-agent sessions on different machines exchange
+ordered messages through named channels. The relay is self-hosted, uses SQLite
+by default, and exposes MCP, a small JSON API, a dashboard, and a terminal UI.
 
-Claude Code's native [Agent Teams](https://code.claude.com/docs/en/agent-teams) coordinate multiple instances on the **same machine**. Claude Bridge fills the gap — it lets Claude Code agents on **different machines** communicate in real time over a shared MCP relay server.
+It does not call a model API and does not require agents to share a filesystem
+or process. Claude Code motivated the project, but the core is MCP-based and is
+not coupled to Anthropic.
 
-```
-Windows PC (Claude Code)         MacBook (Claude Code)
-         |                                |
-         |   SSE · Tailscale / LAN        |  ← server runs here
-         +-------> Claude Bridge <--------+
-                    :8765
-```
+> **Forward-build notice:** this source tree identifies as `1.2.0.dev1`. It is
+> a development build beyond the latest stable PyPI release. Review the
+> [changelog](https://github.com/constripacity/Claude-Bridge/blob/main/CHANGELOG.md)
+> and [0.9-to-1.2 migration guide](https://github.com/constripacity/Claude-Bridge/blob/main/docs/MIGRATING-0.9-TO-1.2.md)
+> before replacing a stable deployment.
 
-One agent sends. The other receives. No polling hacks, no shared filesystems, no cloud dependencies.
+## Why use it?
 
----
+- Keep agents on Windows, macOS, Linux, or a remote host in their own sessions.
+- Send work, results, review requests, and artifact references without remote
+  shell access.
+- Use durable history and consumer cursors to recover after a client restart.
+- Retry sends safely with an idempotency key.
+- Observe the same relay through MCP, a browser dashboard, the TUI, or REST.
+- Run locally or across a private LAN/tailnet with an explicit security policy.
+
+Claude Bridge is a transport, not an autonomous orchestrator. Receiving a
+message never authorizes an agent to execute it.
+
+## Transports
+
+| Interface | Path or command | Purpose |
+|---|---|---|
+| MCP Streamable HTTP | `/mcp` | Recommended remote MCP transport |
+| MCP stdio | `claude-bridge --stdio` | Local subprocess transport |
+| Legacy MCP HTTP+SSE | `/sse` and `/messages/` | Existing configurations during migration |
+| Channel event SSE | `/events/channel/<channel>` | Dashboard, TUI, and custom listeners; not MCP |
+| JSON API | `/api/*` | Browser, scripts, and integrations |
+
+The automated suite performs a real MCP SDK handshake against `/mcp`. Vendor
+clients are not launched in CI. See the evidence-based
+[compatibility matrix](https://github.com/constripacity/Claude-Bridge/blob/main/docs/COMPATIBILITY.md).
 
 ## Architecture
 
-![Architecture](docs/architecture-v2.png)
-
----
-
-## Quickstart
-
-### 1. Install (on the machine that will host the server)
-
-```bash
-pip install claude-code-bridge          # server + web dashboard
-pip install claude-code-bridge[tui]     # also brings the terminal UI
+```mermaid
+flowchart TB
+    A["Claude Code / Codex / MCP client"] -->|"Streamable HTTP /mcp"| B["Claude Bridge"]
+    C["Local MCP client"] -->|"stdio"| B
+    D["Dashboard / TUI / script"] -->|"REST + event SSE"| B
+    B --> E[("SQLite")]
 ```
 
-> **Why the PyPI name differs from the project name:** `claude-bridge` was already taken on PyPI by an unrelated project. The distribution name is `claude-code-bridge`; the import name (`import claude_bridge`) and the CLI command (`claude-bridge`) are unchanged.
+Messages and live-notification records are committed to SQLite in one
+transaction. HTTP processes poll that durable outbox (500 ms by default), so a
+write from a separate stdio process is propagated to connected dashboard/TUI
+event streams. Durable channel history remains authoritative across restarts.
 
-Or from a clone if you'd like to hack on it:
+## Install
+
+```bash
+python -m pip install claude-code-bridge
+```
+
+Install the terminal UI as well:
+
+```bash
+python -m pip install "claude-code-bridge[tui]"
+```
+
+The PyPI distribution is named `claude-code-bridge` because `claude-bridge`
+was already assigned to an unrelated project. The command and Python package
+remain `claude-bridge` and `claude_bridge`.
+
+From a source checkout:
+
 ```bash
 git clone https://github.com/constripacity/Claude-Bridge.git
 cd Claude-Bridge
-pip install -e .[dev]              # editable install with test/lint deps
+python -m pip install -e ".[dev]"
 ```
 
-Or run the official container image (published to GHCR on every release):
+## Start safely
+
+Local-only HTTP mode is the default:
+
 ```bash
-docker run -p 8765:8765 -v claude-bridge-data:/data \
-  ghcr.io/constripacity/claude-bridge:latest
-# with auth, retention, and the audit log:
-docker run -p 8765:8765 -v claude-bridge-data:/data \
-  -e CLAUDE_BRIDGE_AUTH_TOKEN=secret \
-  ghcr.io/constripacity/claude-bridge:latest --host 0.0.0.0 --retention-days 30 --audit-log
+claude-bridge
 ```
-The image binds `0.0.0.0` by default (publishing the port is already an opt-in to network exposure) and stores its SQLite DB in the `/data` volume. Tags: `latest` + `MAJOR.MINOR` + exact `X.Y.Z` per release, plus a moving `edge` from `main`.
 
-### 2. Start the server
+This listens on `127.0.0.1:8765`. Open `http://127.0.0.1:8765/` for the
+dashboard or connect an MCP client to `http://127.0.0.1:8765/mcp`.
+
+Local stdio mode does not open a network listener:
 
 ```bash
-claude-bridge                       # defaults: 127.0.0.1:8765, ./claude-bridge.db
-# accept connections from other machines on the network:
-claude-bridge --host 0.0.0.0
-# or pick a custom port / db path:
-claude-bridge --port 9000 --db /var/lib/claude-bridge/bridge.db
-# or disable the web dashboard if you only want the MCP transport:
-claude-bridge --no-dashboard
-# or run as a pure stdio MCP server (no HTTP, no dashboard, no banner):
 claude-bridge --stdio
 ```
 
-> The default bind changed in v0.7.3 from `0.0.0.0` to `127.0.0.1` so a fresh install on a laptop doesn't silently expose the bridge to whatever network it's on. Pass `--host 0.0.0.0` (or a specific interface IP) when you actually want cross-machine reach. Combine with [Authentication](#authentication) for anything less trusted than your own LAN/tailnet.
+### Cross-machine server
 
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Claude Bridge — General MCP Relay Server
-  Version: 0.9.1
-  http://localhost:8765/             ← Dashboard
-  http://localhost:8765/sse          ← Local MCP config
-  http://<host-address>:8765/sse    ← Remote machines (LAN/Tailscale)
-  http://localhost:8765/api/state    ← JSON state for dashboard
-  http://localhost:8765/status       ← Health check
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+Network binding is deliberately fail-closed. Supply the address clients put in
+their URL as a trusted host and require a token:
 
-### 3. Connect each Claude Code session to the bridge
-
-Use the `claude mcp add` CLI on every machine that should use the bridge — including the host. Don't edit `~/.claude/settings.json` directly; current Claude Code rejects the legacy `mcpServers` block at the schema level.
-
-**Host machine** — points at the local server:
 ```bash
-claude mcp add --transport sse -s user claude-bridge http://localhost:8765/sse
+export CLAUDE_BRIDGE_AUTH_TOKEN="$(openssl rand -hex 32)"
+claude-bridge \
+  --host 0.0.0.0 \
+  --trusted-host 100.100.20.30
 ```
 
-**Remote machines** — point at the host's reachable address (LAN IP, Tailscale IP, or any other network route). Make sure the host bridge was started with `--host 0.0.0.0` (or the specific interface IP) — the default `127.0.0.1` only accepts local connections.
+Here `100.100.20.30` might be the server's tailnet address. A DNS deployment
+would use a value such as `bridge.example.internal`. `--trusted-host` values
+are hostnames or IP addresses, without a URL scheme or path, and the option is
+repeatable.
+
+Two independent checks are required:
+
+1. `--trusted-host` controls which HTTP Host names are accepted; and
+2. the Bearer token controls who can use protected endpoints.
+
+For a deliberately unauthenticated private test network, replace the token
+with `--allow-unauthenticated-network`. That is an explicit risk acceptance,
+not the recommended production setup.
+
+Use `--tls-cert` and `--tls-key`, an HTTPS reverse proxy, or an encrypted
+overlay network before sending sensitive content across an untrusted network.
+See the [security policy](https://github.com/constripacity/Claude-Bridge/blob/main/SECURITY.md)
+for the complete trust model.
+
+### Container
+
+The official image also fails closed. A network deployment must provide its
+trusted host and authentication policy:
+
 ```bash
-claude mcp add --transport sse -s user claude-bridge http://<host-address>:8765/sse
+export CLAUDE_BRIDGE_AUTH_TOKEN="$(openssl rand -hex 32)"
+docker run --rm -p 8765:8765 \
+  -v claude-bridge-data:/data \
+  -e CLAUDE_BRIDGE_AUTH_TOKEN \
+  -e CLAUDE_BRIDGE_TRUSTED_HOSTS="100.100.20.30" \
+  ghcr.io/constripacity/claude-bridge:latest
 ```
 
-**Single-machine / stdio mode** — when there's no need for cross-machine reach, Claude Code can spawn the bridge as a subprocess and talk to it over stdin/stdout, no HTTP at all:
+The SQLite database is stored in `/data`. Release images use exact and
+major/minor tags; `edge` tracks `main`.
+
+## Connect a client
+
+### Claude Code
+
+Remote Streamable HTTP:
+
+```bash
+claude mcp add --transport http -s user claude-bridge \
+  http://127.0.0.1:8765/mcp
+```
+
+Local stdio:
+
 ```bash
 claude mcp add -s user claude-bridge -- claude-bridge --stdio
-# share the SQLite store with an HTTP instance if you also run one:
-claude mcp add -s user claude-bridge -- claude-bridge --stdio --db /path/to/shared.db
 ```
 
-Use `-s user` to share the entry across all your projects, or `-s local` to scope it to one. Verify with `claude mcp list` — `claude-bridge` should show as `✓ Connected`. If a Claude Code session is already running, type `/mcp` inside it to re-handshake (or restart the session) so the new tools register.
+For a protected remote endpoint, attach the matching Authorization header
+using the option supported by the installed Claude Code version. Legacy
+configurations can continue to target `/sse` with `--transport sse` while they
+migrate.
 
-That's it. Every connected Claude Code session now has six new tools.
+### Codex
 
----
+Local stdio in `~/.codex/config.toml`:
 
-## MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `bridge_send` | Send a message to a named channel |
-| `bridge_receive` | Read messages — pass `since_id` for incremental polling |
-| `bridge_channels` | List all active channels and message counts |
-| `bridge_ping` | Health check + server stats |
-| `bridge_clear` | Clear all messages from a channel |
-| `bridge_status` | Cross-channel overview with recent messages |
-
----
-
-## Usage
-
-Agents communicate over **named channels**. Convention: `<project>:<role>`.
-
-**Machine A (orchestrator):**
+```toml
+[mcp_servers.claude_bridge]
+command = "claude-bridge"
+args = ["--stdio"]
 ```
+
+Remote Streamable HTTP:
+
+```toml
+[mcp_servers.claude_bridge]
+url = "http://127.0.0.1:8765/mcp"
+bearer_token_env_var = "CLAUDE_BRIDGE_AUTH_TOKEN"
+```
+
+These examples follow the transports each client documents. The repository's
+CI verifies MCP protocol behavior, not a full vendor-client launch. See
+[compatibility matrix](https://github.com/constripacity/Claude-Bridge/blob/main/docs/COMPATIBILITY.md)
+before making support claims.
+
+## MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `bridge_send` | Send legacy text or a protocol-v1 message; supports idempotent retries |
+| `bridge_receive` | Read a bounded page using a message cursor or durable consumer cursor |
+| `bridge_wait` | Wait up to 55 seconds for new messages without rapid polling |
+| `bridge_ack` | Monotonically advance a consumer's channel-scoped cursor |
+| `bridge_channels` | List active channels and counts |
+| `bridge_ping` | Check bridge health and capabilities |
+| `bridge_status` | Summarize recent activity across channels |
+| `bridge_clear` | Delete every message in one channel |
+
+Tool results include structured data for clients that support MCP structured
+content and a readable text representation for compatibility.
+
+### Reliable task/result example
+
+The orchestrator sends a structured task with a stable retry key:
+
+```text
 bridge_send(
-  channel="myproject:orchestrator",
-  sender="windows",
-  content='{"type":"task","phase":1,"action":"run_tests"}'
+  channel="payments:worker",
+  sender="windows-orchestrator",
+  idempotency_key="job-802-task",
+  message={
+    "schema_version": 1,
+    "type": "task",
+    "content": {"action": "run_tests", "target": "payments"},
+    "thread_id": "payments-42",
+    "correlation_id": "job-802"
+  }
 )
 ```
 
-**Machine B (worker):**
-```
-bridge_receive(channel="myproject:orchestrator")
-→ gets the task
+The worker waits using its persisted consumer identity:
 
-bridge_send(
-  channel="myproject:worker",
-  sender="mac",
-  content='{"type":"result","phase":1,"status":"complete","tests_run":61,"failures":0}'
+```text
+bridge_wait(
+  channel="payments:worker",
+  consumer_id="mac-worker",
+  timeout_seconds=20
 )
 ```
 
-**Machine A polls for results:**
-```
-bridge_receive(channel="myproject:worker", since_id="<last_id>")
-```
+After applying the task successfully, it advances its cursor:
 
-The `since_id` parameter ensures each agent only processes new messages on every poll.
-
-If the cursor goes stale — for example after another agent runs `bridge_clear` and the message your `since_id` referred to no longer exists — `bridge_receive` (and `GET /api/messages`) returns an empty result with a `since_id_not_found` warning instead of silently dumping the channel from the start. Drop the bad cursor and call again without `since_id` to re-sync.
-
----
-
-## Channel Naming
-
-Channels are created on first write — no registration needed.
-
-```
-<project>:orchestrator   →  A sends tasks to B
-<project>:worker         →  B sends results to A
-<project>:events         →  shared event log
-<project>:debug          →  verbose diagnostics
-general:sync             →  cross-project coordination
+```text
+bridge_ack(
+  channel="payments:worker",
+  consumer_id="mac-worker",
+  message_id="<processed-message-id>"
+)
 ```
 
----
+It can then send a result to a return channel using the same `thread_id` and
+`correlation_id`. Acknowledgement supplies at-least-once processing semantics;
+it does not make arbitrary external side effects exactly once.
 
-## Networking
+The complete envelope, retry, cursor, and retention contract is documented in
+[protocol reference](https://github.com/constripacity/Claude-Bridge/blob/main/docs/PROTOCOL.md).
 
-The bridge is plain HTTP + Server-Sent Events. As long as the client machine can reach the host's `:8765`, it works — pick whatever connectivity fits your setup:
+## Channels
 
-- **Single machine** — use `localhost`. Nothing to set up.
-- **Same LAN** — use the host's LAN IP (e.g. `192.168.1.42`). No port forwarding needed.
-- **Different networks** (the original motivating case) — use a private overlay between machines:
-  - [Tailscale](https://tailscale.com) is the simplest and what this project is tested against. Install on both machines, join the same tailnet, use the host's tailnet IP in the remote MCP config, and keep `:8765` firewalled to the tailnet — no public exposure.
-  - Other mesh VPNs (ZeroTier, Nebula, headscale) work the same way.
-  - A reverse proxy with auth on a public host works too. If you need to expose the bridge directly to a less-trusted network, enable the built-in [Bearer token](#authentication) instead of running bare.
+Channels are created on first write. A readable convention is
+`<project>:<purpose>`:
 
----
+```text
+payments:orchestrator
+payments:worker
+payments:events
+payments:review
+general:status
+```
 
-## Why not use Agent Teams?
+A channel name is routing, not authorization. In the current shared-token
+model, any authorized client can read, write, or clear any channel.
 
-Claude Code's built-in Agent Teams (experimental, requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) coordinate agents on the **same machine**. They share a process, a filesystem, and a local network. There's no mechanism for two agents running on separate physical machines to talk to each other.
+## Dashboard, TUI, and JSON API
 
-Claude Bridge is the missing layer. It's intentionally minimal — a relay, not an orchestrator. Your agents stay in control of their own logic.
+The dashboard is served at `/` unless `--no-dashboard` is used. It consumes the
+JSON API and the per-channel event stream. Its React application, fonts, and
+other runtime assets are bundled with the package, so loading the dashboard
+does not contact a third-party CDN. A restrictive Content Security Policy is
+applied to the static application.
 
----
+Run the TUI:
 
-## CLAUDE.md
+```bash
+python -m claude_bridge.tui
+python -m claude_bridge.tui \
+  --url http://100.100.20.30:8765 \
+  --sender mac
+```
 
-A ready-to-use `CLAUDE.md` is included. Drop it in your project root or add it to your global `~/.claude/CLAUDE.md` to give every Claude Code session full context on how to use the bridge, which channels belong to which project, and what each machine's role is.
+The TUI reads `CLAUDE_BRIDGE_AUTH_TOKEN` from the environment, keeping the
+secret out of the process command line.
 
----
-
-## Web Dashboard
-
-Open `http://localhost:8765/` in any browser for a live monitor of channels, messages, and senders. Messages appear the instant they land — no 2-second lag. Click into any message for a JSON-highlighted inspector. Includes a send composer (pick a sender, type or paste JSON, ⌘↵ / Ctrl↵ to send) and a per-channel clear button. Adapts to mobile viewports automatically.
-
-The dashboard uses a live SSE stream for the active channel's message feed and continues polling `/api/state` every 2 seconds for channel list and counts.
-
-The JSON API (polling endpoints remain available for scripts and external tools):
+Core HTTP endpoints:
 
 | Endpoint | Purpose |
-|----------|---------|
-| `GET /api/state` | All channels + counts + senders + uptime in one call |
-| `GET /api/messages?channel=X[&since_id=Y][&limit=N]` | Feed for one channel |
-| `GET /api/messages/{id}` | Full message detail (parsed JSON, byte size) |
-| `POST /api/send` `{channel,sender,content}` | Same effect as `bridge_send` |
-| `POST /api/clear` `{channel}` | Drop all messages on a channel |
-| `GET /events/channel/<name>[?since_id=Y]` | Live SSE stream for one channel |
-| `GET /api/audit[?limit=N]` | Recent audit events (when `--audit-log` is on) |
+|---|---|
+| `GET /status` | Minimal unauthenticated health check |
+| `GET /api/state` | Channel counts, senders, version, and uptime |
+| `GET /api/messages?channel=X&since_id=Y&limit=N` | Bounded channel history |
+| `GET /api/messages/{id}` | One message detail |
+| `GET /api/wait?channel=X&consumer_id=Y` | Bounded long poll using a consumer or message cursor |
+| `POST /api/send` | Send legacy text or a protocol-v1 message, with optional idempotency |
+| `POST /api/ack` | Advance one durable consumer cursor |
+| `POST /api/clear` | Clear one channel |
+| `GET`, `POST`, `DELETE /api/session` | Inspect, create, or revoke an opaque dashboard session |
+| `GET /api/audit?limit=N` | Recent audit events when enabled |
+| `GET /events/channel/<channel>` | Live event stream with bounded replay |
 
-Sends from the dashboard are indistinguishable from MCP `bridge_send` calls — they share the same INSERT path.
+The event stream can drop a slow subscriber after its buffer fills; durable
+history remains authoritative. Reconnect with the last message ID and honor
+`cursor_stale` or `replay_truncated` by fetching history explicitly.
 
----
+## Authentication and browser boundaries
 
-## Live event stream
+Set `CLAUDE_BRIDGE_AUTH_TOKEN`, `--auth-token-file`, or `--auth-token`. The
+literal CLI form can appear in process listings; the environment variable or a
+permission-restricted file is preferred.
 
-`GET /events/channel/<name>` is a Server-Sent Events endpoint. Open it and you get a real-time push of every message and clear event on that channel with ~0 ms latency. The polling JSON endpoints remain unchanged for backwards compatibility.
+When enabled, protected REST, MCP, and event endpoints require:
 
-**Events emitted:**
-
-| Event | Payload | When |
-|-------|---------|------|
-| `message` | `{seq, id, channel, sender, content, timestamp}` | On every new message |
-| `clear` | `{channel, cleared}` | When `bridge_clear` or `POST /api/clear` runs |
-| `cursor_stale` | `{since_id}` | Reconnect cursor no longer exists — re-sync via `/api/messages` |
-| `replay_truncated` | `{limit}` | Backlog > 500 rows — re-sync via `/api/messages` |
-
-**Browser (`EventSource`):**
-```javascript
-const es = new EventSource('/events/channel/myproject:worker');
-es.addEventListener('message', e => console.log(JSON.parse(e.data)));
-es.addEventListener('clear',   e => console.log('channel cleared'));
+```text
+Authorization: Bearer <token>
 ```
 
-The browser `EventSource` API cannot send custom headers, so when auth is enabled, pass the token as a query parameter instead:
-```javascript
-const es = new EventSource(`/events/channel/myproject:worker?token=${encodeURIComponent(token)}`);
-```
+`/status` remains public and deliberately contains minimal information. The
+static dashboard shell may be reachable, but protected data APIs still require
+the token.
 
-> **Access-log note:** query-parameter tokens appear in server access logs. If you run the bridge behind a reverse proxy (nginx, Caddy), add a log-scrub rule for `/events/.*[?&]token=` to avoid leaking tokens into your log retention.
+Unsafe browser mutations are restricted by Origin, JSON endpoints require a
+JSON media type, and Host headers are allowlisted. Extra browser origins are
+configured independently with repeatable `--cors-origin` flags.
 
-**Backlog replay on reconnect:** browsers send `Last-Event-ID` automatically on reconnect (using the `id:` field from each SSE frame). TUI clients can pass `?since_id=<last-msg-id>` explicitly. Up to 500 messages are replayed; if more exist, a `replay_truncated` event fires and the client should re-fetch via `/api/messages`.
+The dashboard submits the Bearer token once to `POST /api/session` and receives
+a short-lived opaque `HttpOnly`, `SameSite=Strict` cookie. The master token is
+not written to local storage or a URL. Event streams authenticate with that
+cookie; `?token=` query authentication is rejected. Logging out revokes the
+session, and a server restart invalidates all in-memory dashboard sessions.
 
-**Caps (env-tunable, no restart needed):**
+## Configuration
 
-| Variable | Default | What it limits |
-|----------|---------|----------------|
-| `CLAUDE_BRIDGE_MAX_SSE` | 100 | Total concurrent subscribers across all channels |
-| `CLAUDE_BRIDGE_MAX_SSE_PER_CHANNEL` | 25 | Subscribers per channel |
-| `CLAUDE_BRIDGE_SSE_REPLAY_LIMIT` | 500 | Backlog rows replayed on reconnect |
+| CLI/environment | Default | Purpose |
+|---|---|---|
+| `--host` | `127.0.0.1` | HTTP bind interface |
+| `--port` | `8765` | HTTP port |
+| `--db` / `CLAUDE_BRIDGE_DB` | `./claude-bridge.db` | SQLite path |
+| `--trusted-host` / `CLAUDE_BRIDGE_TRUSTED_HOSTS` | loopback hosts | Accepted Host names/IPs |
+| `--auth-token-file` / `CLAUDE_BRIDGE_AUTH_TOKEN` | unset | Shared Bearer authentication |
+| `--allow-unauthenticated-network` | off | Explicit non-loopback auth bypass |
+| `--cors-origin` / `CLAUDE_BRIDGE_CORS_ORIGIN` | same-origin only | Additional browser origins, including another localhost port |
+| `--tls-cert` + `--tls-key` | unset | Direct HTTPS listener |
+| `--retention-days` / `CLAUDE_BRIDGE_RETENTION_DAYS` | `0` | Delete messages older than N days; `0` keeps them |
+| `--audit-log` / `CLAUDE_BRIDGE_AUDIT_LOG` | off | Record security-relevant events |
+| `CLAUDE_BRIDGE_AUDIT_RETENTION_DAYS` | `90` | Bound audit history |
+| `CLAUDE_BRIDGE_SESSION_TTL_SECONDS` | `28800` | Opaque dashboard-session lifetime |
+| `CLAUDE_BRIDGE_EVENT_POLL_MS` | `500` | Cross-process outbox polling interval |
+| `CLAUDE_BRIDGE_EVENT_RETENTION_DAYS` | `7` | Retain delivered outbox records |
+| `--no-dashboard` | off | Do not mount browser assets |
+| `CLAUDE_BRIDGE_MAX_REQUEST_BYTES` | `262144` | Maximum HTTP request body |
+| `CLAUDE_BRIDGE_MAX_MESSAGE_BYTES` | `131072` | Maximum encoded message |
+| `CLAUDE_BRIDGE_MAX_SSE` | `100` | Total channel-event subscribers |
+| `CLAUDE_BRIDGE_MAX_SSE_PER_CHANNEL` | `25` | Subscribers on one channel |
+| `CLAUDE_BRIDGE_SSE_REPLAY_LIMIT` | `500` | Reconnect backlog cap |
+| `CLAUDE_BRIDGE_STATELESS_HTTP` | off | Use stateless Streamable HTTP sessions |
 
-Requests past a cap get `503 Service Unavailable`. A comment-line keepalive is sent every 15 s to survive the 30–60 s idle cutoff most reverse proxies enforce.
+CLI values take precedence where a matching flag exists. Invalid numeric or
+boolean environment values fail during startup with a configuration error.
 
----
+## Persistence and operational limits
 
-## Terminal UI
+- SQLite runs in WAL mode and is suitable for a personal or small-team relay.
+- The server is not currently a multi-node or high-availability message broker.
+- One HTTP worker plus cooperating stdio processes can share the WAL database;
+  the durable outbox propagates their live events. This remains a small-scale
+  SQLite design, not a multi-node or enterprise broker.
+- Retention can invalidate old cursors. Important work products belong in a
+  repository or artifact store, not only in bridge history.
+- The shared Bearer token does not provide identity or per-channel permissions.
+- No benchmark claim is made without a reproducible benchmark and environment.
 
-If you live in a terminal, run the TUI companion instead of (or alongside) the web dashboard. Install the `[tui]` extra and use the module entry point:
+The future operations and authorization milestones are in
+[roadmap](https://github.com/constripacity/Claude-Bridge/blob/main/docs/ROADMAP.md).
+
+## Development
 
 ```bash
-pip install claude-bridge[tui]
-python -m claude_bridge.tui
-# or:  python -m claude_bridge.tui --url http://<host>:8765 --sender mac
+python -m pip install -e ".[dev]"
+ruff check claude_bridge tests
+pytest -v
+python -m build
 ```
 
-It's a [Textual](https://textual.textualize.io) app that talks to the same JSON API as the dashboard, so they're always in sync. Channels in a sidebar, live-polled feed with sender/type colouring, a JSON-highlighted inspector, send composer, filter, clear, and pause — all keyboard-driven (`?` for help, `q` to quit).
+CI tests Linux across Python 3.10–3.13 and runs current-version smoke jobs on
+Windows and macOS. The real-socket MCP test covers initialization, tool listing,
+send, receive, wait, and acknowledgement through the official SDK. A separate
+job builds the sdist and wheel, validates their metadata, installs each artifact
+into a clean environment, and checks the CLI.
 
-Design reference for every layout (full / compact / narrow / states) lives in `docs/design/terminal/` — open `index.html` to browse the artboards.
-
----
-
-## Authentication
-
-The bridge runs **without auth by default** — anyone who can reach `:8765` can read or write any channel. That's fine for `localhost`, a trusted LAN, or a tailnet. If you need to expose the bridge to a less-trusted network, set a token:
-
-```bash
-# Recommended: env var (token never appears in `ps` output)
-export CLAUDE_BRIDGE_AUTH_TOKEN="$(openssl rand -hex 32)"
-claude-bridge
-
-# Or read it from a file (safer than --auth-token on shared hosts)
-echo "$(openssl rand -hex 32)" > /etc/claude-bridge/token
-chmod 600 /etc/claude-bridge/token
-claude-bridge --auth-token-file /etc/claude-bridge/token
-
-# Or the literal value on the CLI — easy but the value shows up in `ps`
-# output and /proc/<pid>/cmdline; fine for local dev, avoid on shared hosts
-claude-bridge --auth-token "$(openssl rand -hex 32)"
-```
-
-Precedence: `--auth-token > --auth-token-file > CLAUDE_BRIDGE_AUTH_TOKEN`. When set, every endpoint except `/status` (the healthcheck) requires `Authorization: Bearer <token>`. Constant-time comparison; no other state. Unset everything and the bridge runs exactly as it did before — auth is fully opt-in.
-
-**Connecting clients with auth on:**
-
-```bash
-# claude mcp add — pass the header on registration:
-claude mcp add --transport sse -s user claude-bridge \
-    http://<host-address>:8765/sse \
-    --header "Authorization: Bearer $CLAUDE_BRIDGE_AUTH_TOKEN"
-
-# TUI — picks up CLAUDE_BRIDGE_AUTH_TOKEN automatically, or pass --token:
-python -m claude_bridge.tui --url http://<host-address>:8765 \
-    --token "$CLAUDE_BRIDGE_AUTH_TOKEN"
-
-# Web dashboard — open the URL in a browser. On the first /api/* call it
-# prompts you for the token, stores it in localStorage, and attaches it as
-# a Bearer header to every subsequent request. A green "Auth ✓" badge in
-# the top-right with a `clear` button lets you rotate or forget.
-```
-
-**stdio mode is unaffected** — `claude-bridge --stdio` is a subprocess pipe, not a network surface, so it skips the auth check entirely.
-
----
-
-## TLS / HTTPS
-
-By default the bridge serves plain HTTP and the recommended cross-machine setup terminates TLS upstream — a reverse proxy (nginx, Caddy) or an overlay like Tailscale. For a self-contained HTTPS listener with no proxy, point the bridge at a cert + key:
-
-```bash
-claude-bridge --host 0.0.0.0 --tls-cert /etc/claude-bridge/cert.pem \
-                              --tls-key  /etc/claude-bridge/key.pem
-```
-
-Both flags are required together; the cert lifecycle (issuance, renewal) is the operator's responsibility. The banner switches to `https://` URLs when TLS is on. stdio mode ignores these flags.
-
----
-
-## Audit log
-
-Opt-in forensic trail. With `--audit-log` (or `CLAUDE_BRIDGE_AUDIT_LOG=1`) the bridge records security-relevant events to a separate `audit` table:
-
-| Event | Logged when |
-|-------|-------------|
-| `auth_failure` | A protected request is rejected (`401`) |
-| `oversize_reject` | A request body exceeds the size cap (`413`) |
-| `channel_clear` | A channel is cleared (records the count) |
-| `channel_create` | The first message lands on a new channel |
-
-Each row carries a UTC timestamp and the client IP. Read recent events via `GET /api/audit?limit=N` (auth-protected when a token is set; returns `{"enabled": false, "events": []}` when the log is off). Audit rows are **not** removed by message retention — forensic logs usually need to outlive content.
-
----
-
-## Persistence
-
-Messages are persisted to a local SQLite database (`./claude-bridge.db` by default) so they survive server restarts. Override the path with the `CLAUDE_BRIDGE_DB` environment variable:
-
-```bash
-CLAUDE_BRIDGE_DB=/var/lib/claude-bridge/bridge.db claude-bridge
-# or:  claude-bridge --db /var/lib/claude-bridge/bridge.db
-```
-
-The schema is a single `messages` table — easy to inspect with `sqlite3`. Use `bridge_clear` to drop a channel.
-
-### Retention / TTL
-
-By default messages are kept forever. On a long-running host you can cap growth with a retention window — a background sweep deletes messages older than the cutoff:
-
-```bash
-claude-bridge --retention-days 30        # or CLAUDE_BRIDGE_RETENTION_DAYS=30
-```
-
-This is opt-in and **deletes historical state**, so the startup banner prints a loud warning when it's on. The sweep runs on startup and then every `CLAUDE_BRIDGE_RETENTION_SWEEP_SECONDS` (default 3600). `retention_days` is surfaced in `/api/state`. Long-term project memory should live in your notes/repo regardless — the bridge is a transport, not an archive.
-
----
+Read the [contribution guide](https://github.com/constripacity/Claude-Bridge/blob/main/CONTRIBUTING.md)
+before proposing a new capability. For a vulnerability, use the private process
+in the [security policy](https://github.com/constripacity/Claude-Bridge/blob/main/SECURITY.md),
+not a public issue.
 
 ## Roadmap
 
-- [x] Optional SQLite persistence (survive server restarts)
-- [x] Web dashboard (live channel monitor in the browser)
-- [x] `claude-bridge` PyPI package + CLI entrypoint
-- [x] stdio transport (for pure local use without HTTP)
-- [x] Auth token support (Bearer token on every HTTP endpoint, opt-in)
-- [x] Listed on the [MCP Server Registry](https://registry.modelcontextprotocol.io/) as `io.github.constripacity/claude-code-bridge`
-- [x] Live SSE push stream per channel (`GET /events/channel/<name>`) — dashboard + TUI switch from polling to push
-- [x] TLS / HTTPS support (`--tls-cert` / `--tls-key`)
-- [x] Message retention / TTL (`--retention-days`, background sweep)
-- [x] Audit log (`--audit-log`, `GET /api/audit`)
-- [x] Official Docker image published to GHCR
-- [ ] WebSocket transport (alternative to SSE) — *deferred unless requested*
+The current sequence is:
 
----
+1. `1.2` — secure Streamable HTTP, structured messages, idempotency, and durable
+   consumers;
+2. `1.3` — native client diagnostics and an experimental Claude Channels
+   companion;
+3. `1.4` — individual identities, scopes, ACLs, quotas, and token rotation;
+4. `1.5` — observability, operational tooling, and an optional scalable
+   backend; and
+5. `2.0` — federation and an optional A2A adapter if real usage demands them.
 
-## Requirements
-
-- Python 3.10+
-- `mcp`, `starlette`, `uvicorn`, `anyio`, `sse-starlette` (declared in `pyproject.toml`; installed automatically by `pip install claude-bridge`)
-- A reachable network path between machines — `localhost`, LAN, Tailscale, or any other route (see [Networking](#networking))
-
----
-
-## Performance
-
-The server is intentionally lightweight:
-
-- **Idle CPU:** ~0% (M-series efficiency cores, no busy loop)
-- **Memory:** ~25MB
-- **Latency:** <5ms on LAN, <20ms over Tailscale
-- **Messages:** persisted to SQLite (WAL mode) — survives restarts
-
-Safe to run on a MacBook Air M3 without thermal impact.
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). PRs welcome, especially for the roadmap items above.
-
----
-
-## Credits
-
-**Constripacity** – for founding this project and architecting the bridge.
-
----
+Each milestone and its non-goals are defined in the
+[roadmap](https://github.com/constripacity/Claude-Bridge/blob/main/docs/ROADMAP.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see the [license](https://github.com/constripacity/Claude-Bridge/blob/main/LICENSE).
+
+Founded and maintained by **Constripacity**.

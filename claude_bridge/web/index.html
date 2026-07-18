@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
 <title>Claude Bridge · Dashboard</title>
 <style>
   /* Self-hosted fonts under fonts/ — no third-party CDN, so the dashboard
@@ -72,23 +73,6 @@
 <body>
 <div id="root"></div>
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
-        integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
-        crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
-        integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"
-        crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
-        integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y"
-        crossorigin="anonymous"></script>
-
-<script type="text/babel" src="shared.jsx"></script>
-<script type="text/babel" src="dashboard-desktop.jsx"></script>
-<script type="text/babel" src="dashboard-mobile.jsx"></script>
-<script type="text/babel" src="app.jsx"></script>
-
-<script type="text/babel">
-  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
+<script defer src="app.js"></script>
 </body>
 </html>

@@ -8,12 +8,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-bridge"
-description = "Real-time cross-machine MCP relay for Claude Code agents — send and receive messages across named channels."
+description = "Local-first, cross-machine MCP relay for independent coding agents."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [{ name = "Constripacity" }]
-keywords = ["mcp", "claude-code", "agent", "bridge", "sse", "relay"]
+keywords = ["mcp", "claude-code", "codex", "agent", "bridge", "relay"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
@@ -22,12 +22,13 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Communications",
     "Topic :: Software Development :: Libraries",
 ]
 dynamic = ["version"]
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.27.0,<2",
     "starlette>=0.27.0",
     "uvicorn>=0.24.0",
     "anyio>=4.0",
@@ -40,6 +41,7 @@ tui = [
     "httpx>=0.27.0",
 ]
 dev = [
+    "build>=1.2",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     # Hard per-test timeout so a hung test (e.g. a future streaming-response
@@ -55,12 +57,15 @@ dev = [
 Homepage = "https://github.com/constripacity/Claude-Bridge"
 Repository = "https://github.com/constripacity/Claude-Bridge"
 Issues = "https://github.com/constripacity/Claude-Bridge/issues"
+Changelog = "https://github.com/constripacity/Claude-Bridge/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/constripacity/Claude-Bridge#readme"
+Security = "https://github.com/constripacity/Claude-Bridge/security/policy"
 
 [project.scripts]
 claude-bridge = "claude_bridge.cli:main"
 
 [tool.hatch.version]
-path = "claude_bridge/server.py"
+path = "claude_bridge/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["claude_bridge"]
@@ -72,8 +77,22 @@ include = [
     "/README.md",
     "/LICENSE",
     "/CONTRIBUTING.md",
+    "/CHANGELOG.md",
+    "/SECURITY.md",
     "/CLAUDE.md",
+    "/docs/COMPATIBILITY.md",
+    "/docs/MIGRATING-0.9-TO-1.2.md",
+    "/docs/PROTOCOL.md",
+    "/docs/ROADMAP.md",
     "/Dockerfile",
+    "/.dockerignore",
+    "/server.json",
+    "/package.json",
+    "/package-lock.json",
     "/pyproject.toml",
     "/pytest.ini",
+    "/start-bridge.bat",
+    "/start-bridge.sh",
+    "/start-tui.bat",
+    "/start-tui.sh",
 ]

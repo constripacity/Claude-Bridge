@@ -14,9 +14,11 @@ Kept separate from the UI so it's unit-testable without spinning up Textual.
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -55,7 +57,10 @@ TYPE_COLORS: dict[str, str] = {
 def sender_color(name: str) -> str:
     if name in SENDER_OVERRIDES:
         return SENDER_OVERRIDES[name]
-    return SENDER_PALETTE[hash(name) % len(SENDER_PALETTE)]
+    # Python deliberately randomises hash() between processes. A stable digest
+    # keeps sender colours consistent across restarts and machines.
+    digest = hashlib.blake2s(name.encode("utf-8"), digest_size=2).digest()
+    return SENDER_PALETTE[int.from_bytes(digest, "big") % len(SENDER_PALETTE)]
 
 
 def classify_message(content: str) -> str:
@@ -67,7 +72,7 @@ def classify_message(content: str) -> str:
         return "TXT"
     try:
         obj = json.loads(s)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return "TXT"
     if not isinstance(obj, dict):
         return "TXT"
@@ -99,14 +104,18 @@ class BridgeClient:
 
     def __init__(
         self,
-        base_url: str = "http://localhost:8765",
+        base_url: str = "http://127.0.0.1:8765",
         timeout: float = 5.0,
         token: str | None = None,
+        trust_env: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         headers = {"Authorization": f"Bearer {token}"} if token else None
         self._client = httpx.AsyncClient(
-            base_url=self.base_url, timeout=timeout, headers=headers
+            base_url=self.base_url,
+            timeout=timeout,
+            headers=headers,
+            trust_env=trust_env,
         )
 
     async def aclose(self) -> None:
@@ -177,7 +186,10 @@ class BridgeClient:
         # time out between keepalive pings; connect/write timeouts stay tight.
         timeout = httpx.Timeout(connect=5.0, read=None, write=5.0, pool=5.0)
         async with self._client.stream(
-            "GET", f"/events/channel/{channel}", params=params, timeout=timeout,
+            "GET",
+            f"/events/channel/{quote(channel, safe='')}",
+            params=params,
+            timeout=timeout,
         ) as response:
             if response.status_code >= 400:
                 body = await response.aread()

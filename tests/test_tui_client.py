@@ -87,8 +87,8 @@ def test_group_channels_by_prefix():
 def asgi_client(fresh_db):
     """A BridgeClient bound to the in-process ASGI app — no real socket."""
     transport = httpx.ASGITransport(app=bridge.app)
-    client = BridgeClient(base_url="http://testserver")
-    client._client = httpx.AsyncClient(transport=transport, base_url="http://testserver", timeout=5.0)
+    client = BridgeClient(base_url="http://localhost")
+    client._client = httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=5.0)
     return client
 
 
@@ -182,9 +182,9 @@ def test_messages_since_id(asgi_client):
 def _build_asgi_client(token: str | None = None) -> BridgeClient:
     transport = httpx.ASGITransport(app=bridge.app)
     headers = {"Authorization": f"Bearer {token}"} if token else None
-    client = BridgeClient(base_url="http://testserver", token=token)
+    client = BridgeClient(base_url="http://localhost", token=token)
     client._client = httpx.AsyncClient(
-        transport=transport, base_url="http://testserver", timeout=5.0, headers=headers
+        transport=transport, base_url="http://localhost", timeout=5.0, headers=headers
     )
     return client
 

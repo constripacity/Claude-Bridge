@@ -3,6 +3,18 @@
 //           selectedId, detail, onSelectChannel, onSelectMessage,
 //           onSend, onClear, defaultSender }
 
+import React from 'react';
+import {
+  BridgeMark,
+  ChromeLabel,
+  Eyebrow,
+  HighlightedJson,
+  Icon,
+  LiveDot,
+  SenderPill,
+  SENDER_COLORS,
+} from './shared.jsx';
+
 const { useState } = React;
 
 function HeaderBar({ state }) {
@@ -565,4 +577,4 @@ function DashboardDesktop(props) {
   );
 }
 
-window.DashboardDesktop = DashboardDesktop;
+export default DashboardDesktop;

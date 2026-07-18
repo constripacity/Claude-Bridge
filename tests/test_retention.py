@@ -59,6 +59,32 @@ async def test_retention_deletes_old_keeps_new(fresh_db, monkeypatch):
     assert [r["content"] for r in rows] == ["fresh"]
 
 
+@pytest.mark.asyncio
+async def test_retention_removes_linked_idempotency_record(fresh_db, monkeypatch):
+    monkeypatch.setattr(bridge, "RETENTION_DAYS", 7)
+    first = await bridge.insert_message_reliable(
+        "demo:retry",
+        "sender",
+        "old logical send",
+        idempotency_key="retained-key",
+    )
+    _age_message(first.id, 30)
+
+    assert await bridge.retention_sweep_once() == 1
+    assert bridge.reliability_store().get_idempotency(
+        channel="demo:retry", sender="sender", key="retained-key"
+    ) is None
+
+    retried = await bridge.insert_message_reliable(
+        "demo:retry",
+        "sender",
+        "old logical send",
+        idempotency_key="retained-key",
+    )
+    assert retried.id != first.id
+    assert retried.deduplicated is False
+
+
 # ── delete_messages_before is exclusive on the cutoff ───────────────────────
 
 
@@ -93,8 +119,7 @@ def test_lifespan_startup_sweep_and_clean_shutdown(fresh_db, monkeypatch):
     # Entering the TestClient context runs the app lifespan: immediate startup
     # sweep + the periodic loop. Exiting must cancel the loop without hanging
     # (the pytest-timeout backstop would catch a regression here).
-    with TestClient(bridge.app) as client:
+    with TestClient(bridge.app, base_url="http://localhost") as client:
         assert client.get("/status").status_code == 200
 
     assert bridge.db().execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"] == 0
-

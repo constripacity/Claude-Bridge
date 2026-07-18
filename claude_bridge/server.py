@@ -1752,6 +1752,18 @@ async def api_ack(request: Request) -> JSONResponse:
     })
 
 
+def _request_is_https(scheme: str, headers) -> bool:
+    """True when the request reached the edge over HTTPS — either this process
+    terminates TLS (``scheme == 'https'``) or a TLS-terminating reverse proxy
+    forwarded cleartext with ``X-Forwarded-Proto: https``. Used only to tighten
+    behavior (Secure cookies, HSTS), so honoring the forwarded header can never
+    weaken security."""
+    if scheme == "https":
+        return True
+    forwarded = headers.get("x-forwarded-proto", "")
+    return forwarded.split(",")[0].strip().lower() == "https"
+
+
 async def api_session(request: Request) -> JSONResponse:
     """Exchange a transient dashboard Bearer token for an HttpOnly cookie."""
     if request.method == "GET":
@@ -1769,7 +1781,11 @@ async def api_session(request: Request) -> JSONResponse:
             SESSION_COOKIE_NAME,
             session_id,
             httponly=True,
-            secure=request.url.scheme == "https",
+            # Mark the cookie Secure when the edge is HTTPS, including a
+            # TLS-terminating reverse proxy that forwards cleartext to us (the
+            # app then sees http). Trusting X-Forwarded-Proto here is safe: it
+            # can only *add* the Secure attribute, never drop it. (L1)
+            secure=_request_is_https(request.url.scheme, request.headers),
             samesite="strict",
             path="/",
             max_age=SETTINGS.session_ttl_seconds,
@@ -2083,9 +2099,25 @@ _cors_kwargs: dict[str, object] = {
     "expose_headers": ["Mcp-Session-Id"],
 }
 
+async def _sqlite_operational_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Map a transient SQLite busy/locked error escaping a read handler to a
+    retryable 503, matching the write paths (which raise BridgeBusyError → 503).
+    Genuine SQL/logic OperationalErrors ("no such column", …) are re-raised so
+    they still surface as a 500 rather than being masked as a fake busy. (L2)"""
+    message = str(exc).lower()
+    if "locked" in message or "busy" in message:
+        return JSONResponse(
+            {"error": "database temporarily busy, retry"},
+            status_code=503,
+            headers={"Retry-After": "1"},
+        )
+    raise exc
+
+
 app = Starlette(
     routes=_routes,
     lifespan=_lifespan,
+    exception_handlers={sqlite3.OperationalError: _sqlite_operational_error_handler},
     middleware=[
         # CORS first (outermost) so OPTIONS preflight doesn't get blocked by
         # the auth check before browsers can complete the handshake.

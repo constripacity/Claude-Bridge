@@ -8,8 +8,8 @@ mutually hostile users.
 
 | Version | Status |
 |---|---|
-| `main` / `1.2.0.dev1` | Active development; security fixes land here first |
-| Latest stable release | Supported |
+| `main` (unreleased) | Active development; security fixes land here first |
+| `1.2.0` (latest stable) | Supported |
 | Older release lines | Upgrade required before a fix is backported |
 
 Pre-release builds are provided for testing and may change before the stable
@@ -47,6 +47,11 @@ currently offer a bug bounty or guaranteed response SLA.
 - The current Bearer token is one shared secret with bridge-wide access. It
   does not provide per-user identity, per-channel ACLs, or separate read,
   write, and clear permissions.
+- Consumer acknowledgement cursors (`bridge_ack`) are keyed by a caller-supplied
+  `consumer_id` that is not bound to an identity. Any token holder can advance
+  any consumer's cursor, so consumers are a coordination convenience, not an
+  isolation boundary. Per-identity, revocable credentials are planned for a
+  later teams/authorization release.
 - `/status` intentionally remains unauthenticated and exposes only health
   information. Protected APIs and MCP endpoints require the token when one is
   configured.
@@ -119,7 +124,21 @@ credential can mint one, and minting rotates any existing cookie. Open event
 streams revalidate session expiry/revocation at least every five seconds.
 Browser access is same-origin by default; even another localhost port requires
 an explicit `--cors-origin`. Use HTTPS so the cookie receives the `Secure`
-attribute when the dashboard is accessed across a network.
+attribute when the dashboard is accessed across a network. When TLS terminates
+at a reverse proxy that forwards `X-Forwarded-Proto: https`, the `Secure`
+attribute and HSTS are still applied even though the bridge itself sees plain
+HTTP.
+
+## Operational limits
+
+- The bridge uses a single SQLite connection driven from the event loop. Under
+  heavy concurrent write contention, read requests may return a retryable `503`
+  (with `Retry-After`) rather than block; clients should honor it.
+- Clearing or applying retention to a very large channel runs as one
+  transaction and briefly occupies the event loop for the duration of the
+  delete. This is acceptable for typical channel sizes; batched deletion for
+  very large channels is a planned operations-tier improvement. SQLite remains
+  the default and is not intended for high-write multi-process fan-in.
 
 ## Dependency and release hygiene
 

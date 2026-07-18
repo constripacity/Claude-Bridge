@@ -6,6 +6,20 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
+def _reached_edge_over_https(scope: Scope) -> bool:
+    """True when TLS terminated at the edge — either this process (scheme
+    ``https``) or a TLS-terminating reverse proxy that set ``X-Forwarded-Proto``.
+    HSTS is only ever *added*, so trusting the forwarded header cannot weaken
+    security. Mirrors ``server._request_is_https`` for the raw ASGI header list.
+    """
+    if scope.get("scheme") == "https":
+        return True
+    for name, value in scope.get("headers", ()):
+        if name == b"x-forwarded-proto":
+            return value.decode("latin-1").split(",")[0].strip().lower() == "https"
+    return False
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -32,7 +46,7 @@ class SecurityHeadersMiddleware:
                     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
                     "form-action 'self'",
                 )
-                if scope.get("scheme") == "https":
+                if _reached_edge_over_https(scope):
                     headers.setdefault(
                         "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
                     )

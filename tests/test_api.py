@@ -1,5 +1,7 @@
 """Tests for the JSON HTTP API used by the web dashboard."""
 
+import sqlite3
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -10,6 +12,39 @@ import claude_bridge.server as bridge
 def client(fresh_db):
     """TestClient against the live ASGI app, with the per-test SQLite fixture."""
     return TestClient(bridge.app, base_url="http://localhost")
+
+
+class _RaisingConn:
+    """A fake DB connection whose execute() raises, to exercise the read-path
+    error handling without a real lock race."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def execute(self, *args, **kwargs):
+        raise self._exc
+
+
+def test_transient_sqlite_busy_on_read_returns_503(client, monkeypatch):
+    """L2: a transient 'database is locked'/'busy' escaping a read handler is
+    mapped to a retryable 503 (matching the write paths), not an untyped 500."""
+    monkeypatch.setattr(
+        bridge, "db", lambda: _RaisingConn(sqlite3.OperationalError("database is locked"))
+    )
+    r = client.get("/api/state")
+    assert r.status_code == 503
+    assert r.headers.get("retry-after") == "1"
+
+
+def test_real_sqlite_error_on_read_still_500(fresh_db, monkeypatch):
+    """A genuine SQL/logic OperationalError must NOT be masked as a fake busy —
+    it still surfaces as a 500."""
+    monkeypatch.setattr(
+        bridge, "db", lambda: _RaisingConn(sqlite3.OperationalError("no such column: bogus"))
+    )
+    client = TestClient(bridge.app, base_url="http://localhost", raise_server_exceptions=False)
+    r = client.get("/api/state")
+    assert r.status_code == 500
 
 
 # ── /status (existing, but version field is new) ─────────────────────────────

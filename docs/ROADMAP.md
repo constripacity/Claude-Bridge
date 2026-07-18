@@ -7,7 +7,7 @@ orchestrator.
 Dates are not promises. A milestone ships only when its acceptance gates pass;
 features may move as real deployments provide better evidence.
 
-## Current forward build — `1.2.0.dev1`
+## Current forward build — `1.2.0`
 
 Theme: secure interoperability and reliable delivery primitives.
 

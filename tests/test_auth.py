@@ -74,6 +74,30 @@ def test_protected_endpoints_accept_correct_token(client, auth_on):
     assert r.json()["service"] == "claude-bridge"
 
 
+def test_session_cookie_secure_and_hsts_behind_tls_proxy(client, auth_on):
+    """L1: a TLS-terminating reverse proxy forwards cleartext to the app (which
+    then sees http) with X-Forwarded-Proto: https. The session cookie must still
+    be marked Secure and HSTS must be emitted."""
+    r = client.post("/api/session", headers={**HEADERS_OK, "X-Forwarded-Proto": "https"})
+    assert r.status_code == 200
+    set_cookie = r.headers.get("set-cookie", "")
+    assert "claude_bridge_session=" in set_cookie
+    assert "Secure" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert r.headers.get("strict-transport-security", "").startswith("max-age=")
+
+
+def test_session_cookie_not_secure_on_plain_http(client, auth_on):
+    """Without TLS at the edge the cookie is not Secure — else the browser drops
+    it on a plain-http localhost dashboard — and HSTS is absent."""
+    r = client.post("/api/session", headers=HEADERS_OK)
+    assert r.status_code == 200
+    set_cookie = r.headers.get("set-cookie", "")
+    assert "claude_bridge_session=" in set_cookie
+    assert "Secure" not in set_cookie
+    assert "strict-transport-security" not in {k.lower() for k in r.headers}
+
+
 def test_send_and_clear_require_token(client, auth_on):
     # Without header
     assert client.post("/api/send", json={

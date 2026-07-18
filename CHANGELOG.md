@@ -5,7 +5,7 @@ Notable changes to Claude Bridge are recorded here. The format follows
 [semantic versioning](https://semver.org/) where the Python packaging format
 allows it.
 
-## [Unreleased]
+## [1.2.0] - 2026-07-18
 
 ### Added
 
@@ -115,7 +115,7 @@ allows it.
 - Added the dashboard, JSON API, package layout, and initial cross-machine MCP
   relay workflow.
 
-[Unreleased]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.1...HEAD
+[1.2.0]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.1...v1.2.0
 [0.9.1]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/constripacity/Claude-Bridge/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/constripacity/Claude-Bridge/compare/v0.7.6...v0.8.0

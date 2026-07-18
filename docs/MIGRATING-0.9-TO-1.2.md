@@ -1,6 +1,6 @@
 # Migrating from 0.9.1 to the 1.2 forward build
 
-The `1.2.0.dev1` forward build preserves the existing `messages` table, legacy
+The `1.2.0` forward build preserves the existing `messages` table, legacy
 string payloads, stdio mode, and the old `/sse` transport. It also changes a
 few defaults and security boundaries deliberately. Test a copy of the SQLite
 database before replacing a bridge that matters to active work.
@@ -83,7 +83,7 @@ as a protocol envelope only when it has `schema_version`, `type`, and `content`.
 
 ## Verification after upgrading
 
-1. `claude-bridge --version` reports `1.2.0.dev1`.
+1. `claude-bridge --version` reports `1.2.0`.
 2. `GET /status` is healthy and contains no database path or channel data.
 3. Each client initializes and lists all eight tools.
 4. Send, receive/wait, and acknowledge one test message.

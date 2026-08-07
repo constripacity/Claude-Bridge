@@ -216,14 +216,17 @@ The JSON API (polling endpoints remain available for scripts and external tools)
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /api/state` | All channels + counts + senders + uptime in one call |
-| `GET /api/messages?channel=X[&since_id=Y][&limit=N]` | Feed for one channel |
-| `GET /api/messages/{id}` | Full message detail (parsed JSON, byte size) |
-| `POST /api/send` `{channel,sender,content}` | Same effect as `bridge_send` |
+| `GET /api/messages?channel=X[&since_id=Y][&limit=N][&full=true]` | Feed for one channel. By default each entry carries a truncated `preview` (~200 chars); pass `full=true` to get the whole `content` instead — one request for a full conversation rather than N+1 detail fetches |
+| `GET /api/messages/{id}` | Full message detail for one message (parsed JSON, byte size) |
+| **`POST /api/send`** `{channel,sender,content}` | **Write a message** — same effect as `bridge_send`. This is the write endpoint; `/api/messages` is read-only and `POST`ing to it returns a 405 pointing here |
 | `POST /api/clear` `{channel}` | Drop all messages on a channel |
 | `GET /events/channel/<name>[?since_id=Y]` | Live SSE stream for one channel |
 | `GET /api/audit[?limit=N]` | Recent audit events (when `--audit-log` is on) |
 
-Sends from the dashboard are indistinguishable from MCP `bridge_send` calls — they share the same INSERT path.
+**Reading is REST; sending is `POST /api/send` or MCP `bridge_send`.** Sends from
+the dashboard are indistinguishable from MCP `bridge_send` calls — they share the
+same INSERT path. Timestamps are UTC; the `ts` field is full ISO-8601 with a
+trailing `Z`.
 
 ---
 

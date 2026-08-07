@@ -4,6 +4,36 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
+## [0.9.3] - 2026-08-08
+
+Field-use fixes from a live two-agent pairing session (same-machine, legacy
+`/sse`). No new transport, protocol, or configuration surface.
+
+### Added
+
+- `GET /api/messages?full=true` returns each message's whole `content` instead
+  of a truncated `preview`, so a conversation reads in one request rather than
+  N+1 per-message detail fetches (F-004).
+
+### Changed
+
+- `GET /api/messages` now returns `ts` as full ISO-8601 with the trailing `Z`
+  (previously a bare `HH:MM:SS`), and the dashboard renders every timestamp in
+  the viewer's local zone with a zone label. An unlabelled UTC time two hours
+  off the reader's clock reads as a local one and gets believed (F-006).
+- `POST /api/messages` (a common wrong guess for sending) now returns a pointed
+  405 naming `POST /api/send`, instead of a bare "Method Not Allowed" (F-003).
+
+### Documentation
+
+- `CLAUDE.md`: start the bridge **before** any agent session; if a session
+  attached before the bridge was up (or the bridge restarted under it), every
+  tool fails with `-32602` and the fix is `/mcp` → Reconnect in each session
+  (F-001, F-002). Added a same-machine, role-based sender-ID convention for two
+  agents on one host (F-005).
+- `README.md`: documented `POST /api/send` as the write endpoint and `?full=true`
+  on the messages listing, and which operations are REST vs MCP (F-003, F-004).
+
 ## [0.9.2] - 2026-07-18
 
 Security/correctness patch. Small, targeted fix on the 0.9.1 base — no new
@@ -59,6 +89,7 @@ transport, protocol, or configuration surface.
 
 - Dashboard, JSON API, package layout, and the initial cross-machine relay.
 
+[0.9.3]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/constripacity/Claude-Bridge/compare/v0.8.0...v0.9.0

@@ -29,8 +29,14 @@ At the start of every session, identify yourself before using the bridge:
 - **On Linux:** your sender ID is `linux`
 - **On another machine:** use a short, descriptive ID, e.g. `vps-01`, `watcher`
 
+**Two agents on the *same* machine** would both be `windows` (or `mac`), which
+collides. When the distinguishing factor is *project context* rather than
+hardware, use role- or project-based IDs instead — e.g. `veyltrace` and `mcli`,
+or `analyzer` and `runtime`. Pick one stable ID per session and never
+impersonate another participant.
+
 Always include your sender ID in every `bridge_send` call. Never guess — check
-your machine if unsure.
+your machine (or your role) if unsure.
 
 ---
 
@@ -187,7 +193,23 @@ job is to:
 
 ## Error Handling
 
-If the bridge is unreachable:
+### Start the bridge BEFORE any agent session
+
+The MCP handshake happens once, when a session attaches. If a Claude Code
+session starts while nothing is listening on 8765 — or the bridge is restarted
+underneath an already-attached session — the session's bridge connection is
+wedged, and **starting the server afterward does not heal it on its own.**
+
+**Symptom:** every bridge tool then fails with `MCP error -32602: Invalid
+request parameters` — including `bridge_ping`, which takes no parameters at all.
+That error code is misleading: it is *not* about your arguments. Do not rewrite
+your (correct) tool call; the session simply has no live bridge session.
+
+**Fix:** run `/mcp` → **Reconnect** in each affected session. This fully
+restores both send and receive. The reliable sequence is: start the bridge
+first, then launch the agents; if you forgot, just Reconnect each one.
+
+### If the bridge is unreachable
 - Host: check that the bridge is running (`claude-bridge` or `python -m claude_bridge`)
 - Remote: verify the host is reachable on the chosen network path (LAN, Tailscale, etc.) and use `bridge_ping` to test
 

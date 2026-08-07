@@ -618,6 +618,10 @@ async def api_messages(request: Request) -> JSONResponse:
     if not channel:
         return JSONResponse({"error": "channel parameter required"}, status_code=400)
     since_id = request.query_params.get("since_id")
+    # ?full=true returns each message's whole `content` instead of a truncated
+    # `preview`, so a conversation reads in one request instead of N+1 detail
+    # fetches (F-004). Preview stays the default to keep the listing light.
+    full = request.query_params.get("full", "").strip().lower() in ("1", "true", "yes")
     try:
         limit = int(request.query_params.get("limit", 50))
     except ValueError:
@@ -651,17 +655,39 @@ async def api_messages(request: Request) -> JSONResponse:
     messages = []
     for r in rows:
         content = r["content"]
-        preview = content if len(content) <= 200 else content[:200] + "…"
-        messages.append({
+        entry = {
             "seq": r["seq"],
             "id": r["id"],
-            "ts": r["timestamp"][11:19] if r["timestamp"] else "",
+            # Full ISO-8601 with the trailing Z, never a bare HH:MM:SS — an
+            # unlabelled wall-clock time reads as the viewer's local zone and
+            # gets believed when it is actually UTC (F-006). ts_full kept for
+            # backward compatibility; both now carry the offset.
+            "ts": r["timestamp"],
             "ts_full": r["timestamp"],
             "sender": r["sender"],
             "is_json": _is_json_str(content),
-            "preview": preview,
-        })
+        }
+        if full:
+            entry["content"] = content
+        else:
+            entry["preview"] = content if len(content) <= 200 else content[:200] + "…"
+        messages.append(entry)
     return JSONResponse({"channel": channel, "messages": messages})
+
+
+async def api_messages_write_hint(request: Request) -> JSONResponse:
+    """POST to /api/messages is a common wrong guess for sending — this path is
+    the read listing, and the write endpoint is POST /api/send. Return a pointed
+    405 naming the real route instead of a bare 'Method Not Allowed' (F-003)."""
+    return JSONResponse(
+        {
+            "error": "POST is not supported on /api/messages — it is the read "
+                     "listing. To send a message, POST to /api/send.",
+            "hint": "POST /api/send",
+        },
+        status_code=405,
+        headers={"Allow": "GET"},
+    )
 
 
 async def api_message_detail(request: Request) -> JSONResponse:
@@ -949,7 +975,8 @@ async def _lifespan(app: Starlette):
 _routes = [
     Route("/status", endpoint=http_status),
     Route("/api/state", endpoint=api_state),
-    Route("/api/messages", endpoint=api_messages),
+    Route("/api/messages", endpoint=api_messages, methods=["GET"]),
+    Route("/api/messages", endpoint=api_messages_write_hint, methods=["POST"]),
     Route("/api/messages/{msg_id}", endpoint=api_message_detail),
     Route("/api/send", endpoint=api_send, methods=["POST"]),
     Route("/api/clear", endpoint=api_clear, methods=["POST"]),

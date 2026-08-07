@@ -27,32 +27,37 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-    # Upper-bounded: mcp 2.0 removed the low-level `@server.list_tools()` /
-    # `@server.call_tool()` decorator API this server is built on. CI installs
-    # dependencies unpinned, so without the cap a new major silently breaks a
-    # released line. Lift and migrate to the 2.x API in a dedicated change.
+    # Every dependency is upper-bounded below its next major. CI installs deps
+    # unpinned, so without caps a new major silently breaks a released line —
+    # mcp 2.0 removed the low-level `@server.list_tools()`/`@server.call_tool()`
+    # decorator API this server uses and made every prior 0.9.x wheel
+    # uninstallable. Caps allow the current working majors; lift each one
+    # deliberately (and re-test) when adopting the next.
     "mcp>=1.0.0,<2",
-    "starlette>=0.27.0",
-    "uvicorn>=0.24.0",
-    "anyio>=4.0",
-    "sse-starlette>=2.0",
+    "starlette>=0.27.0,<2",
+    "uvicorn>=0.24.0,<1",
+    "anyio>=4.0,<5",
+    "sse-starlette>=2.0,<4",
 ]
 
 [project.optional-dependencies]
 tui = [
-    "textual>=0.79.0",
-    "httpx>=0.27.0",
+    "textual>=0.79.0,<9",
+    "httpx>=0.27.0,<1",
 ]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
+    # Dev deps are capped too so an unpinned upgrade can't turn CI red on
+    # unchanged code (ruff 0.16 broadened its default rule set and did exactly
+    # that; the lint selection is also pinned in [tool.ruff.lint]).
+    "pytest>=8.0,<10",
+    "pytest-asyncio>=0.23,<2",
     # Hard per-test timeout so a hung test (e.g. a future streaming-response
     # deadlock) fails in seconds instead of burning CI's 6h job ceiling, as
     # the v0.8.0 SSE tests did before the broker-level rewrite.
-    "pytest-timeout>=2.3",
-    "httpx>=0.27.0",
-    "ruff>=0.6",
-    "textual>=0.79.0",
+    "pytest-timeout>=2.3,<3",
+    "httpx>=0.27.0,<1",
+    "ruff>=0.6,<0.17",
+    "textual>=0.79.0,<9",
 ]
 
 [project.urls]

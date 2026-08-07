@@ -4,6 +4,19 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
+## [0.9.5] - 2026-08-08
+
+Dependency-hardening patch. No feature or API changes.
+
+### Fixed
+
+- Upper-bounded every remaining runtime, TUI, and dev dependency below its next
+  major (`starlette<2`, `uvicorn<1`, `anyio<5`, `sse-starlette<4`, `textual<9`,
+  `httpx<1`, and the dev pins). 0.9.4 capped only `mcp`; this extends the same
+  protection to the rest, so no unpinned upgrade can break a released line or
+  turn CI red on unchanged code. Verified in a clean venv (all deps resolve
+  within the caps, 110 tests pass).
+
 ## [0.9.4] - 2026-08-08
 
 Field-use fixes from a live two-agent pairing session (same-machine, legacy
@@ -104,6 +117,7 @@ transport, protocol, or configuration surface.
 
 - Dashboard, JSON API, package layout, and the initial cross-machine relay.
 
+[0.9.5]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.2...v0.9.4
 [0.9.2]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.0...v0.9.1

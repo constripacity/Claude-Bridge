@@ -27,7 +27,11 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
-    "mcp>=1.0.0",
+    # Upper-bounded: mcp 2.0 removed the low-level `@server.list_tools()` /
+    # `@server.call_tool()` decorator API this server is built on. CI installs
+    # dependencies unpinned, so without the cap a new major silently breaks a
+    # released line. Lift and migrate to the 2.x API in a dedicated change.
+    "mcp>=1.0.0,<2",
     "starlette>=0.27.0",
     "uvicorn>=0.24.0",
     "anyio>=4.0",

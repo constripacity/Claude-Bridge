@@ -4,10 +4,25 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
-## [0.9.3] - 2026-08-08
+## [0.9.4] - 2026-08-08
 
 Field-use fixes from a live two-agent pairing session (same-machine, legacy
-`/sse`). No new transport, protocol, or configuration surface.
+`/sse`), plus a dependency cap that keeps the package installable. No new
+transport, protocol, or configuration surface. Supersedes and replaces 0.9.3,
+which was withdrawn before it reached PyPI because its dependency metadata was
+unbounded (see below).
+
+### Fixed
+
+- **Capped `mcp<2` so the package still installs and runs.** The dependency was
+  declared `mcp>=1.0.0` with no upper bound; once `mcp 2.0` shipped it removed
+  the low-level `@server.list_tools()` / `@server.call_tool()` decorator API this
+  server is built on, so a fresh `pip install` resolved `mcp 2.0` and failed to
+  import. The cap pins the 1.x API. (This affected every prior 0.9.x release;
+  0.9.0–0.9.2 have been yanked from PyPI.)
+- Pinned the ruff lint rule set to its historical default (`E4/E7/E9/F`) in
+  `pyproject.toml`, so an unpinned ruff upgrade broadening its defaults can no
+  longer turn CI red on unchanged code (ruff 0.16 did exactly that).
 
 ### Added
 
@@ -89,7 +104,7 @@ transport, protocol, or configuration surface.
 
 - Dashboard, JSON API, package layout, and the initial cross-machine relay.
 
-[0.9.3]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.2...v0.9.3
+[0.9.4]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.2...v0.9.4
 [0.9.2]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/constripacity/Claude-Bridge/compare/v0.8.0...v0.9.0

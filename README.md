@@ -115,10 +115,10 @@ their URL as a trusted host and require a token:
 export CLAUDE_BRIDGE_AUTH_TOKEN="$(openssl rand -hex 32)"
 claude-bridge \
   --host 0.0.0.0 \
-  --trusted-host 100.100.20.30
+  --trusted-host 100.64.0.10
 ```
 
-Here `100.100.20.30` might be the server's tailnet address. A DNS deployment
+Here `100.64.0.10` might be the server's tailnet address. A DNS deployment
 would use a value such as `bridge.example.internal`. `--trusted-host` values
 are hostnames or IP addresses, without a URL scheme or path, and the option is
 repeatable.
@@ -147,7 +147,7 @@ export CLAUDE_BRIDGE_AUTH_TOKEN="$(openssl rand -hex 32)"
 docker run --rm -p 8765:8765 \
   -v claude-bridge-data:/data \
   -e CLAUDE_BRIDGE_AUTH_TOKEN \
-  -e CLAUDE_BRIDGE_TRUSTED_HOSTS="100.100.20.30" \
+  -e CLAUDE_BRIDGE_TRUSTED_HOSTS="100.64.0.10" \
   ghcr.io/constripacity/claude-bridge:latest
 ```
 
@@ -290,7 +290,7 @@ Run the TUI:
 ```bash
 python -m claude_bridge.tui
 python -m claude_bridge.tui \
-  --url http://100.100.20.30:8765 \
+  --url http://100.64.0.10:8765 \
   --sender mac
 ```
 

@@ -4,6 +4,24 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
+## [0.9.6] - 2026-08-17
+
+Packaging/registry fix so `uvx` — and MCP directories (e.g. Glama) that
+auto-launch servers via `uvx` — can install and run the stdio server. No
+functional change to the bridge itself.
+
+### Fixed
+
+- **`uvx claude-code-bridge` now works.** The PyPI distribution is
+  `claude-code-bridge` but the console command was only `claude-bridge`, so
+  `uvx claude-code-bridge` failed ("executable not provided by package"). Added a
+  `claude-code-bridge` console-script alias (identical entry point; `claude-bridge`
+  stays primary), so the package name resolves as a command.
+- **MCP Registry launch config:** `--stdio` moved from `runtimeArguments` (flags
+  for `uvx` itself) to `packageArguments` (args for the server), so the registry
+  entry launches `uvx claude-code-bridge --stdio` correctly — unblocking the
+  directory auto-installers that previously reported "cannot be installed."
+
 ## [0.9.5] - 2026-08-08
 
 Dependency-hardening patch. No feature or API changes.
@@ -117,6 +135,7 @@ transport, protocol, or configuration surface.
 
 - Dashboard, JSON API, package layout, and the initial cross-machine relay.
 
+[0.9.6]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.2...v0.9.4
 [0.9.2]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.1...v0.9.2

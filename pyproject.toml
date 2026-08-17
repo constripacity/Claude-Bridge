@@ -67,6 +67,11 @@ Issues = "https://github.com/constripacity/Claude-Bridge/issues"
 
 [project.scripts]
 claude-bridge = "claude_bridge.cli:main"
+# Alias so the console command matches the PyPI distribution name — lets
+# `uvx claude-code-bridge` / `uvx claude-code-bridge --stdio` resolve directly
+# (uvx looks for an executable named after the package). Both commands are
+# identical entry points; `claude-bridge` stays the primary.
+claude-code-bridge = "claude_bridge.cli:main"
 
 [tool.hatch.version]
 path = "claude_bridge/_version.py"

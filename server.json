@@ -6,15 +6,15 @@
     "url": "https://github.com/constripacity/Claude-Bridge",
     "source": "github"
   },
-  "version": "0.9.5",
+  "version": "0.9.6",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "claude-code-bridge",
-      "version": "0.9.5",
+      "version": "0.9.6",
       "runtimeHint": "uvx",
-      "runtimeArguments": [
+      "packageArguments": [
         {
           "type": "positional",
           "value": "--stdio",

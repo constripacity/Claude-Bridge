@@ -28,7 +28,7 @@ import anyio
 from anyio.streams.memory import MemoryObjectSendStream
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, ToolAnnotations
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route
@@ -317,6 +317,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="bridge_send",
+            annotations=ToolAnnotations(title="Send message", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
             description=(
                 "Send a message to a named channel on the Claude Bridge. "
                 "The other agent can read it with bridge_receive. "
@@ -343,6 +344,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="bridge_receive",
+            annotations=ToolAnnotations(title="Receive messages", readOnlyHint=True, openWorldHint=False),
             description=(
                 "Read messages from a named channel. "
                 "Pass since_id to only get messages newer than a known message. "
@@ -370,6 +372,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="bridge_channels",
+            annotations=ToolAnnotations(title="List channels", readOnlyHint=True, openWorldHint=False),
             description="List all active channels and their message counts.",
             inputSchema={
                 "type": "object",
@@ -378,6 +381,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="bridge_ping",
+            annotations=ToolAnnotations(title="Ping bridge", readOnlyHint=True, openWorldHint=False),
             description="Check if the bridge server is alive and get a status summary.",
             inputSchema={
                 "type": "object",
@@ -386,6 +390,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="bridge_clear",
+            annotations=ToolAnnotations(title="Clear channel", readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
             description="Clear all messages from a specific channel. Useful for resetting state.",
             inputSchema={
                 "type": "object",
@@ -400,6 +405,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="bridge_status",
+            annotations=ToolAnnotations(title="Cross-channel status", readOnlyHint=True, openWorldHint=False),
             description=(
                 "Get the last N messages from ALL channels at once. "
                 "Useful for getting a full picture of what's happening across agents."

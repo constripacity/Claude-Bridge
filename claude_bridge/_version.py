@@ -13,4 +13,4 @@ the CLI flags, making ``--auth-token``, ``--db``, ``--no-dashboard``,
 ``--cors-origin``, ``--retention-days`` and ``--audit-log`` silent no-ops.
 """
 
-VERSION = "0.9.6"
+VERSION = "0.9.7"

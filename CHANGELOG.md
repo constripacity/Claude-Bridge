@@ -4,6 +4,20 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
+## [0.9.7] - 2026-08-17
+
+Add MCP tool-behavior annotations. No functional change.
+
+### Added
+
+- Every tool now declares MCP annotation hints (`readOnlyHint`,
+  `destructiveHint`, `idempotentHint`, `openWorldHint`, and a `title`). The four
+  read tools (`bridge_receive`, `bridge_channels`, `bridge_ping`,
+  `bridge_status`) are marked read-only; `bridge_send` is a non-destructive
+  write; `bridge_clear` is destructive + idempotent; all are closed-world. Lets
+  MCP clients (and directory scorers) understand each tool's behavior before
+  calling it.
+
 ## [0.9.6] - 2026-08-17
 
 Packaging/registry fix so `uvx` — and MCP directories (e.g. Glama) that
@@ -135,6 +149,7 @@ transport, protocol, or configuration surface.
 
 - Dashboard, JSON API, package layout, and the initial cross-machine relay.
 
+[0.9.7]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/constripacity/Claude-Bridge/compare/v0.9.2...v0.9.4

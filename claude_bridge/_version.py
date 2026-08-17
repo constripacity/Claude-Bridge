@@ -5,4 +5,4 @@ must be able to parse and apply its configuration before :mod:`server` reads
 environment-backed settings.
 """
 
-VERSION = "1.2.0"
+VERSION = "1.2.0rc1"

@@ -170,6 +170,38 @@ def test_api_messages_limit_clamped(client):
     assert len(client.get("/api/messages?channel=c&limit=0").json()["messages"]) == 1
 
 
+def test_api_messages_full_returns_untruncated_content(client):
+    """F-004: ?full=true returns each message's whole content (no preview), so a
+    conversation reads in one request instead of N+1 detail fetches."""
+    long = "y" * 500
+    client.post("/api/send", json={"channel": "c", "sender": "a", "content": long})
+    m = client.get("/api/messages?channel=c&full=true").json()["messages"][0]
+    assert m["content"] == long            # full, untruncated
+    assert "preview" not in m              # preview replaced by content
+    # default (no ?full) still truncates to a preview
+    d = client.get("/api/messages?channel=c").json()["messages"][0]
+    assert "content" not in d and d["preview"].endswith("…")
+
+
+def test_api_messages_timestamp_is_iso_with_zone(client):
+    """F-006: ts must be full ISO-8601 with the trailing Z, never a bare
+    HH:MM:SS that reads as the viewer's local time."""
+    client.post("/api/send", json={"channel": "c", "sender": "a", "content": "hi"})
+    m = client.get("/api/messages?channel=c").json()["messages"][0]
+    assert m["ts"].endswith("Z") and "T" in m["ts"]
+    assert m["ts"] == m["ts_full"]
+
+
+def test_api_messages_post_points_to_send(client):
+    """F-003: POST /api/messages (a common wrong guess) returns a pointed 405
+    naming POST /api/send, not a bare 'Method Not Allowed'."""
+    r = client.post("/api/messages?channel=c", json={"sender": "a", "content": "x"})
+    assert r.status_code == 405
+    body = r.json()
+    assert "/api/send" in body["error"]
+    assert body["hint"] == "POST /api/send"
+
+
 # ── /api/messages/{id} ──────────────────────────────────────────────────────
 
 def test_api_message_detail_404(client):

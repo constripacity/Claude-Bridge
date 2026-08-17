@@ -32,6 +32,13 @@
           "isRequired": false,
           "format": "string",
           "isSecret": false
+        },
+        {
+          "name": "CLAUDE_BRIDGE_AUTH_TOKEN",
+          "description": "Optional Bearer token for HTTP mode. As of 1.2.0, binding a non-loopback host requires this token together with an explicit trusted host (CLAUDE_BRIDGE_TRUSTED_HOSTS), unless --allow-unauthenticated-network is passed; loopback (stdio and localhost) does not require it. When set, all HTTP endpoints except /status require Authorization: Bearer <token>. Not used in stdio mode.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
         }
       ]
     }

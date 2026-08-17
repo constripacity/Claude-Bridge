@@ -109,11 +109,11 @@ function MobileMessageRow({ m, selected, onSelect }) {
           fontFamily: 'var(--mono)', fontSize: 10,
           color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums',
         }}>seq {m.seq}</span>
-        <span style={{
+        <span title={m.ts} style={{
           marginLeft: 'auto',
           fontFamily: 'var(--mono)', fontSize: 10,
           color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums',
-        }}>{m.ts}</span>
+        }}>{fmtTs(m.ts)}</span>
         {m.is_json && (
           <span style={{
             fontFamily: 'var(--mono)', fontSize: 8.5,

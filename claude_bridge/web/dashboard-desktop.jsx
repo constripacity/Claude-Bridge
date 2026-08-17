@@ -289,10 +289,10 @@ function MessageRow({ m, selected, onSelect }) {
         width: 30, textAlign: 'right',
       }}>{m.seq}</span>
 
-      <span style={{
+      <span title={m.ts} style={{
         fontFamily: 'var(--mono)', fontSize: 11,
         color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums',
-      }}>{m.ts}</span>
+      }}>{fmtTs(m.ts)}</span>
 
       <SenderPill name={m.sender} size="sm" />
 
@@ -454,7 +454,7 @@ function Inspector({ detail }) {
       </div>
     );
   }
-  const ts = (detail.ts || '').replace('T', ' ').replace('Z', '');
+  const ts = fmtTs(detail.ts, true);
   return (
     <div style={{
       width: 360, background: 'var(--bg-base)',

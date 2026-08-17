@@ -1023,7 +1023,7 @@ async def list_tools() -> list[Tool]:
             },
             outputSchema=object_output,
             annotations=ToolAnnotations(
-                title="Send bridge message",
+                title="Send message",
                 readOnlyHint=False,
                 destructiveHint=False,
                 idempotentHint=False,
@@ -1048,7 +1048,12 @@ async def list_tools() -> list[Tool]:
                 "additionalProperties": False,
             },
             outputSchema=object_output,
-            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+            annotations=ToolAnnotations(
+                title="Receive messages",
+                readOnlyHint=True,
+                destructiveHint=False,
+                openWorldHint=False,
+            ),
         ),
         Tool(
             name="bridge_wait",
@@ -1070,7 +1075,12 @@ async def list_tools() -> list[Tool]:
                 "additionalProperties": False,
             },
             outputSchema=object_output,
-            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+            annotations=ToolAnnotations(
+                title="Wait for messages",
+                readOnlyHint=True,
+                destructiveHint=False,
+                openWorldHint=False,
+            ),
         ),
         Tool(
             name="bridge_ack",
@@ -1091,7 +1101,11 @@ async def list_tools() -> list[Tool]:
             },
             outputSchema=object_output,
             annotations=ToolAnnotations(
-                readOnlyHint=False, destructiveHint=False, idempotentHint=True
+                title="Acknowledge messages",
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
             ),
         ),
         Tool(
@@ -1099,14 +1113,24 @@ async def list_tools() -> list[Tool]:
             description="List all active channels and their message counts.",
             inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
             outputSchema=object_output,
-            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+            annotations=ToolAnnotations(
+                title="List channels",
+                readOnlyHint=True,
+                destructiveHint=False,
+                openWorldHint=False,
+            ),
         ),
         Tool(
             name="bridge_ping",
             description="Check if the bridge server is alive and get a status summary.",
             inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
             outputSchema=object_output,
-            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+            annotations=ToolAnnotations(
+                title="Ping bridge",
+                readOnlyHint=True,
+                destructiveHint=False,
+                openWorldHint=False,
+            ),
         ),
         Tool(
             name="bridge_clear",
@@ -1119,7 +1143,11 @@ async def list_tools() -> list[Tool]:
             },
             outputSchema=object_output,
             annotations=ToolAnnotations(
-                readOnlyHint=False, destructiveHint=True, idempotentHint=True
+                title="Clear channel",
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=True,
+                openWorldHint=False,
             ),
         ),
         Tool(
@@ -1140,7 +1168,12 @@ async def list_tools() -> list[Tool]:
                 "additionalProperties": False,
             },
             outputSchema=object_output,
-            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+            annotations=ToolAnnotations(
+                title="Cross-channel status",
+                readOnlyHint=True,
+                destructiveHint=False,
+                openWorldHint=False,
+            ),
         ),
     ]
 
@@ -1499,6 +1532,10 @@ async def api_messages(request: Request) -> JSONResponse:
     except ValueError:
         limit = 50
     limit = max(1, min(limit, 500))
+    # ?full=true returns each message's whole content instead of a truncated
+    # preview, so a conversation reads in one request instead of N+1 detail
+    # fetches (F-004). Preview stays the default to keep the listing light.
+    full = request.query_params.get("full", "").strip().lower() in ("1", "true", "yes")
 
     try:
         rows, warning = _read_channel_rows(
@@ -1513,20 +1550,27 @@ async def api_messages(request: Request) -> JSONResponse:
     messages = []
     for r in rows:
         content = r["content"]
-        preview = content if len(content) <= 200 else content[:200] + "…"
-        messages.append({
+        entry = {
             "seq": r["seq"],
             "id": r["id"],
-            "ts": r["timestamp"][11:19] if r["timestamp"] else "",
+            # Full ISO-8601 with the trailing Z, never a bare HH:MM:SS — an
+            # unlabelled wall-clock time reads as the viewer's local zone and
+            # gets believed when it is actually UTC (F-006). ts_full kept for
+            # backward compatibility; both now carry the offset.
+            "ts": r["timestamp"],
             "ts_full": r["timestamp"],
             "sender": r["sender"],
             "is_json": _is_json_str(content),
-            "preview": preview,
-        })
+        }
+        if full:
+            entry["content"] = content
+        else:
+            entry["preview"] = content if len(content) <= 200 else content[:200] + "…"
         parsed = parse_message_content(content)
         if parsed.envelope is not None:
-            messages[-1]["encoding"] = parsed.encoding.value
-            messages[-1]["message"] = parsed.envelope.to_dict()
+            entry["encoding"] = parsed.encoding.value
+            entry["message"] = parsed.envelope.to_dict()
+        messages.append(entry)
     response: dict[str, Any] = {
         "channel": channel,
         "messages": messages,
@@ -1541,6 +1585,21 @@ async def api_messages(request: Request) -> JSONResponse:
     if not messages and not since_id and not consumer_id and not warning:
         response.pop("next_cursor")
     return JSONResponse(response)
+
+
+async def api_messages_write_hint(request: Request) -> JSONResponse:
+    """POST to /api/messages is a common wrong guess for sending — this path is
+    the read listing, and the write endpoint is POST /api/send. Return a pointed
+    405 naming the real route instead of a bare 'Method Not Allowed' (F-003)."""
+    return JSONResponse(
+        {
+            "error": "POST is not supported on /api/messages — it is the read "
+                     "listing. To send a message, POST to /api/send.",
+            "hint": "POST /api/send",
+        },
+        status_code=405,
+        headers={"Allow": "GET"},
+    )
 
 
 async def api_message_detail(request: Request) -> JSONResponse:
@@ -2067,7 +2126,8 @@ async def _lifespan(app: Starlette):
 _routes = [
     Route("/status", endpoint=http_status),
     Route("/api/state", endpoint=api_state),
-    Route("/api/messages", endpoint=api_messages),
+    Route("/api/messages", endpoint=api_messages, methods=["GET"]),
+    Route("/api/messages", endpoint=api_messages_write_hint, methods=["POST"]),
     Route("/api/messages/{msg_id}", endpoint=api_message_detail),
     Route("/api/wait", endpoint=api_wait),
     Route("/api/send", endpoint=api_send, methods=["POST"]),

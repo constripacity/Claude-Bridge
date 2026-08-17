@@ -4,9 +4,9 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
-## [1.2.0] - 2026-08-17
+## [1.2.0] - 2026-08-18
 
-> `1.2.0rc1` (2026-08-17) is the first pre-release of this line, staged for a soak on PyPI (`pip install --pre` / `uvx claude-code-bridge==1.2.0rc1`). `1.2.0` final follows after the soak. This is a **major release with breaking changes** — see `docs/MIGRATING-0.9-TO-1.2.md`.
+> Final release (the `1.2.0rc1` pre-release, 2026-08-17, was its soak). This is a **major release with breaking changes**: non-loopback binds now fail closed — they require `--trusted-host` plus a Bearer token, or an explicit `--allow-unauthenticated-network`; the dashboard uses opaque cookie sessions instead of `?token=` query auth; and invalid env vars fail startup. See `docs/MIGRATING-0.9-TO-1.2.md`.
 
 ### Added
 

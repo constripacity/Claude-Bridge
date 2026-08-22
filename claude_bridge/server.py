@@ -72,13 +72,23 @@ from .streamable_http import (
     StreamableHTTPConfig,
     RestartableStreamableHTTPApp,
 )
+from .taskqueue import (
+    TaskLeaseError,
+    TaskNotFoundError,
+    TaskStatus,
+    TaskStore,
+    ensure_taskqueue_schema,
+    task_to_dict,
+)
 from .validation import (
     DEFAULT_LIMITS,
     BridgeValidationError,
+    canonical_json,
     normalize_limit,
     validate_channel,
     validate_consumer,
     validate_idempotency_key,
+    validate_non_negative_int,
     validate_raw_content,
     validate_sender,
 )
@@ -134,6 +144,13 @@ RETENTION_SWEEP_SECONDS = SETTINGS.retention_sweep_seconds
 AUDIT_ENABLED = SETTINGS.audit_enabled
 AUDIT_RETENTION_DAYS = SETTINGS.audit_retention_days
 
+# Task queue (v1.3). A claim leases a task for `lease_seconds` (the visibility
+# timeout): an unacked lease is requeued (or dead-lettered past max_attempts).
+# Defaults are env-tunable; a caller-supplied lease is clamped to [1, MAX].
+DEFAULT_LEASE_SECONDS = SETTINGS.default_lease_seconds
+MAX_LEASE_SECONDS = SETTINGS.max_lease_seconds
+DEFAULT_MAX_ATTEMPTS = SETTINGS.default_max_attempts
+
 
 # ── Persistence ──────────────────────────────────────────────────────────────
 
@@ -145,6 +162,10 @@ _message_conditions: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, asyncio.Condition
 ] = weakref.WeakKeyDictionary()
 _reliability: ReliabilityStore | None = None
+_taskstore: TaskStore | None = None
+_task_conditions: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Condition
+] = weakref.WeakKeyDictionary()
 _dashboard_sessions = SessionStore(SETTINGS.session_ttl_seconds)
 _observed_event_seq = 0
 _event_delivery_lock = asyncio.Lock()
@@ -162,6 +183,27 @@ def _message_condition_for_current_loop() -> asyncio.Condition:
         condition = asyncio.Condition()
         _message_conditions[loop] = condition
     return condition
+
+
+def _task_condition_for_current_loop() -> asyncio.Condition:
+    """Condition that wakes bridge_claim long-pollers when work appears."""
+    loop = asyncio.get_running_loop()
+    condition = _task_conditions.get(loop)
+    if condition is None:
+        condition = asyncio.Condition()
+        _task_conditions[loop] = condition
+    return condition
+
+
+async def _notify_task_waiters() -> None:
+    """Wake same-process claim waiters after a task is enqueued or requeued.
+
+    Cross-process enqueues are picked up by the 1-second recheck in the claim
+    long-poll loop, mirroring how message waiters observe other processes.
+    """
+    condition = _task_condition_for_current_loop()
+    async with condition:
+        condition.notify_all()
 
 
 def _prepare_database_file(path: str) -> None:
@@ -289,6 +331,7 @@ def db() -> sqlite3.Connection:
             "ON bridge_events(timestamp)"
         )
         ensure_reliability_schema(_conn)
+        ensure_taskqueue_schema(_conn)
         # Early forward builds copied complete message bodies into the event
         # outbox. Live delivery can reconstruct a message from its source row,
         # so scrub those redundant privacy-sensitive copies during upgrade.
@@ -322,6 +365,16 @@ def reliability_store() -> ReliabilityStore:
         # avoidable cross-process write on the first request.
         _reliability = ReliabilityStore(conn, initialize=False)
     return _reliability
+
+
+def task_store() -> TaskStore:
+    """Return the task-queue repository for the active test/runtime DB."""
+    global _taskstore
+    conn = db()
+    if _taskstore is None or _taskstore.conn is not conn:
+        # ``db()`` created/migrated this schema under the writer slot already.
+        _taskstore = TaskStore(conn, initialize=False)
+    return _taskstore
 
 
 async def _begin_immediate(conn: sqlite3.Connection, attempts: int = 7) -> None:
@@ -804,6 +857,9 @@ async def clear_channel(channel: str) -> int:
             # removed messages are cleared in the same transaction, so they
             # cannot dangle or return an ID that no longer resolves.
             conn.execute("DELETE FROM bridge_idempotency WHERE channel = ?", (channel,))
+            # A channel reset also drops its task queue (same transaction, so a
+            # cleared channel never leaves orphaned tasks behind).
+            conn.execute("DELETE FROM tasks WHERE channel = ?", (channel,))
             cur = conn.execute("DELETE FROM messages WHERE channel = ?", (channel,))
             count = cur.rowcount
             data = {"channel": channel, "cleared": count}
@@ -849,6 +905,161 @@ async def acknowledge_message_reliable(
             if conn.in_transaction:
                 conn.rollback()
             raise
+
+
+# ── Task queue (v1.3) ─────────────────────────────────────────────────────────
+#
+# Exclusive work distribution on the same single-writer discipline as message
+# inserts. Storage engine and guarantees live in taskqueue.py.
+
+
+def _clamp_lease_seconds(value: int | None) -> int:
+    if value is None:
+        return DEFAULT_LEASE_SECONDS
+    lease = validate_non_negative_int(value, "lease_seconds")
+    if lease < 1:
+        raise BridgeValidationError(
+            "lease_seconds", "out_of_range", "must be at least 1"
+        )
+    return min(lease, MAX_LEASE_SECONDS)
+
+
+async def enqueue_task_reliable(
+    *,
+    channel: str,
+    payload: str,
+    priority: int = 0,
+    max_attempts: int | None = None,
+    delay_seconds: int = 0,
+    idempotency_key: str | None = None,
+    enqueued_by: str | None = None,
+):
+    conn = db()
+    async with _write_lock:
+        await _begin_immediate(conn)
+        try:
+            result = task_store().enqueue(
+                channel=channel,
+                payload=payload,
+                priority=priority,
+                max_attempts=(
+                    DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
+                ),
+                delay_seconds=delay_seconds,
+                idempotency_key=idempotency_key,
+                enqueued_by=enqueued_by,
+            )
+            conn.commit()
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+    if result.created:
+        await _notify_task_waiters()
+    return result
+
+
+async def _claim_task_once(*, channel: str, consumer: str, lease_seconds: int):
+    conn = db()
+    async with _write_lock:
+        await _begin_immediate(conn)
+        try:
+            task = task_store().claim(
+                channel=channel, consumer=consumer, lease_seconds=lease_seconds
+            )
+            conn.commit()
+            return task
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+
+async def claim_task_waiting(
+    *, channel: str, consumer: str, lease_seconds: int, wait_seconds: float
+):
+    """Claim the oldest eligible task, optionally long-polling for one.
+
+    Attempts a claim, then (if the queue was empty and ``wait_seconds`` > 0)
+    waits on the task condition — instant wake for a same-process enqueue, a
+    ≤1s recheck for a cross-process one or a just-available delayed task — and
+    retries until the deadline.
+    """
+    task = await _claim_task_once(
+        channel=channel, consumer=consumer, lease_seconds=lease_seconds
+    )
+    if task is not None or wait_seconds <= 0:
+        return task
+    wait_seconds = max(0.0, min(float(wait_seconds), 55.0))
+    deadline = asyncio.get_running_loop().time() + wait_seconds
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return None
+        condition = _task_condition_for_current_loop()
+        async with condition:
+            try:
+                await asyncio.wait_for(condition.wait(), timeout=min(remaining, 1.0))
+            except asyncio.TimeoutError:
+                pass
+        task = await _claim_task_once(
+            channel=channel, consumer=consumer, lease_seconds=lease_seconds
+        )
+        if task is not None:
+            return task
+
+
+async def complete_task_reliable(
+    *, channel: str, task_id: str, lease_token: str, result: str | None = None
+):
+    conn = db()
+    async with _write_lock:
+        await _begin_immediate(conn)
+        try:
+            task = task_store().complete(
+                channel=channel,
+                task_id=task_id,
+                lease_token=lease_token,
+                result=result,
+            )
+            conn.commit()
+            return task
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+
+async def fail_task_reliable(
+    *,
+    channel: str,
+    task_id: str,
+    lease_token: str,
+    requeue: bool = True,
+    error: str | None = None,
+    retry_delay_seconds: int = 0,
+):
+    conn = db()
+    async with _write_lock:
+        await _begin_immediate(conn)
+        try:
+            task = task_store().fail(
+                channel=channel,
+                task_id=task_id,
+                lease_token=lease_token,
+                requeue=requeue,
+                error=error,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+            conn.commit()
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+    # A requeued task is claimable again; wake any waiting workers.
+    if task.status is TaskStatus.PENDING:
+        await _notify_task_waiters()
+    return task
 
 
 # ── Message retention ────────────────────────────────────────────────────────
@@ -913,7 +1124,17 @@ async def housekeeping_sweep_once() -> tuple[int, int, int, int, int]:
         events = db().execute(
             "DELETE FROM bridge_events WHERE timestamp < ?", (event_cutoff,)
         ).rowcount
+        # Task queue: requeue (or dead-letter) leases past their visibility
+        # timeout so abandoned work is retried even when no one is claiming, and
+        # prune finished tasks under the same retention window as messages.
+        task_sweep = task_store().requeue_expired(limit=10_000)
+        if RETENTION_DAYS > 0:
+            task_store().prune_terminal(
+                older_than_iso=_retention_cutoff_iso(RETENTION_DAYS), limit=10_000
+            )
     sessions = _dashboard_sessions.cleanup()
+    if task_sweep.requeued:
+        await _notify_task_waiters()
     return messages, audit_rows, idempotency, events, sessions
 
 
@@ -1170,6 +1391,187 @@ async def list_tools() -> list[Tool]:
             outputSchema=object_output,
             annotations=ToolAnnotations(
                 title="Cross-channel status",
+                readOnlyHint=True,
+                destructiveHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
+            name="bridge_enqueue",
+            description=(
+                "Add a task to a channel's work queue for a worker to claim. Give "
+                "payload (structured JSON) or content (a string). Pass "
+                "idempotency_key so a retried enqueue does not create a duplicate."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "payload": {"description": "Structured JSON task payload"},
+                    "content": {"type": "string", "description": "String task payload"},
+                    "priority": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "Higher priority is claimed sooner",
+                    },
+                    "max_attempts": {"type": "integer", "minimum": 1},
+                    "delay_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                        "description": "Delay before the task becomes claimable",
+                    },
+                    "idempotency_key": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 256,
+                    },
+                    "enqueued_by": {"type": "string", "minLength": 1, "maxLength": 256},
+                },
+                "required": ["channel"],
+                "oneOf": [
+                    {"required": ["payload"], "not": {"required": ["content"]}},
+                    {"required": ["content"], "not": {"required": ["payload"]}},
+                ],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Enqueue task",
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
+            name="bridge_claim",
+            description=(
+                "Atomically claim the next task from a channel's queue — no two "
+                "workers ever get the same task. The claim holds a lease for "
+                "lease_seconds; complete or fail it before the lease expires or it "
+                "is requeued to another worker. Set wait_seconds to long-poll."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1},
+                    "consumer": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "lease_seconds": {"type": "integer", "minimum": 1},
+                    "wait_seconds": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 55,
+                        "default": 0,
+                    },
+                },
+                "required": ["channel", "consumer"],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Claim task",
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
+            name="bridge_complete",
+            description=(
+                "Mark a claimed task completed. Requires the lease_token returned "
+                "by bridge_claim; a task whose lease expired and was reclaimed "
+                "cannot be completed by the previous holder."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1},
+                    "task_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "lease_token": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "result": {"description": "Optional structured JSON result"},
+                },
+                "required": ["channel", "task_id", "lease_token"],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Complete task",
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
+            name="bridge_fail",
+            description=(
+                "Mark a claimed task failed. By default it is requeued (after "
+                "retry_delay_seconds) until max_attempts is exhausted, then "
+                "dead-lettered; set requeue=false to dead-letter immediately. "
+                "Requires the lease_token from bridge_claim."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1},
+                    "task_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "lease_token": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "requeue": {"type": "boolean", "default": True},
+                    "error": {"type": "string", "description": "Optional failure detail"},
+                    "retry_delay_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0,
+                    },
+                },
+                "required": ["channel", "task_id", "lease_token"],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Fail task",
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
+            name="bridge_tasks",
+            description=(
+                "Inspect a channel's task queue: per-status counts plus a recent "
+                "task list. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1},
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "pending",
+                            "claimed",
+                            "completed",
+                            "failed",
+                            "dead",
+                        ],
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 500,
+                        "default": 50,
+                    },
+                },
+                "required": ["channel"],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Inspect queue",
                 readOnlyHint=True,
                 destructiveHint=False,
                 openWorldHint=False,
@@ -1448,6 +1850,144 @@ async def dispatch_tool(
         return _tool_output(
             "\n\n".join(sections),
             {"channels": channel_data},
+            structured=structured,
+        )
+
+    # ── bridge_enqueue ───────────────────────────────────────────────────────
+    elif name == "bridge_enqueue":
+        channel = validate_channel(arguments["channel"])
+        if "payload" in arguments:
+            payload = canonical_json(arguments["payload"], field="payload")
+        else:
+            payload = arguments["content"]
+        outcome = await enqueue_task_reliable(
+            channel=channel,
+            payload=payload,
+            priority=arguments.get("priority", 0),
+            max_attempts=arguments.get("max_attempts"),
+            delay_seconds=arguments.get("delay_seconds", 0),
+            idempotency_key=arguments.get("idempotency_key"),
+            enqueued_by=arguments.get("enqueued_by"),
+        )
+        task = outcome.task
+        verb = "Enqueued" if outcome.created else "Deduplicated (existing)"
+        return _tool_output(
+            f"✓ {verb} task {task.id} on [{channel}] (status {task.status.value})",
+            {"created": outcome.created, **task_to_dict(task, include_payload=False)},
+            structured=structured,
+        )
+
+    # ── bridge_claim ─────────────────────────────────────────────────────────
+    elif name == "bridge_claim":
+        channel = validate_channel(arguments["channel"])
+        consumer = validate_consumer(arguments["consumer"])
+        lease_seconds = _clamp_lease_seconds(arguments.get("lease_seconds"))
+        task = await claim_task_waiting(
+            channel=channel,
+            consumer=consumer,
+            lease_seconds=lease_seconds,
+            wait_seconds=arguments.get("wait_seconds", 0),
+        )
+        if task is None:
+            return _tool_output(
+                f"No task available on [{channel}]",
+                {"channel": channel, "task": None},
+                structured=structured,
+            )
+        # The lease_token is returned only to the claiming worker; it fences a
+        # later complete/fail and is otherwise omitted from task views.
+        return _tool_output(
+            f"✓ Claimed task {task.id} on [{channel}] "
+            f"(attempt {task.attempts}/{task.max_attempts}, "
+            f"lease until {task.lease_expires_at})\n"
+            f"  lease_token: {task.lease_token}",
+            {
+                "channel": channel,
+                "task": {**task_to_dict(task), "lease_token": task.lease_token},
+            },
+            structured=structured,
+        )
+
+    # ── bridge_complete ──────────────────────────────────────────────────────
+    elif name == "bridge_complete":
+        channel = validate_channel(arguments["channel"])
+        result_payload = None
+        if arguments.get("result") is not None:
+            result_payload = canonical_json(arguments["result"], field="result")
+        try:
+            task = await complete_task_reliable(
+                channel=channel,
+                task_id=arguments["task_id"],
+                lease_token=arguments["lease_token"],
+                result=result_payload,
+            )
+        except TaskNotFoundError as exc:
+            raise BridgeValidationError(
+                "task_id", "not_found", "does not exist in this channel"
+            ) from exc
+        except TaskLeaseError as exc:
+            raise BridgeValidationError(
+                "lease_token", "lost", "lease no longer held (expired or reclaimed)"
+            ) from exc
+        return _tool_output(
+            f"✓ Completed task {task.id} on [{channel}]",
+            task_to_dict(task, include_payload=False),
+            structured=structured,
+        )
+
+    # ── bridge_fail ──────────────────────────────────────────────────────────
+    elif name == "bridge_fail":
+        channel = validate_channel(arguments["channel"])
+        try:
+            task = await fail_task_reliable(
+                channel=channel,
+                task_id=arguments["task_id"],
+                lease_token=arguments["lease_token"],
+                requeue=bool(arguments.get("requeue", True)),
+                error=arguments.get("error"),
+                retry_delay_seconds=arguments.get("retry_delay_seconds", 0),
+            )
+        except TaskNotFoundError as exc:
+            raise BridgeValidationError(
+                "task_id", "not_found", "does not exist in this channel"
+            ) from exc
+        except TaskLeaseError as exc:
+            raise BridgeValidationError(
+                "lease_token", "lost", "lease no longer held (expired or reclaimed)"
+            ) from exc
+        disposition = "requeued" if task.status is TaskStatus.PENDING else "dead-lettered"
+        return _tool_output(
+            f"✓ Failed task {task.id} on [{channel}] "
+            f"({disposition}, attempt {task.attempts}/{task.max_attempts})",
+            task_to_dict(task, include_payload=False),
+            structured=structured,
+        )
+
+    # ── bridge_tasks ─────────────────────────────────────────────────────────
+    elif name == "bridge_tasks":
+        channel = validate_channel(arguments["channel"])
+        store = task_store()
+        counts = store.counts(channel=channel)
+        tasks = store.list_tasks(
+            channel=channel,
+            status=arguments.get("status"),
+            limit=normalize_limit(arguments.get("limit"), default=50, maximum=500),
+        )
+        summary = f"[{channel}] queue — " + ", ".join(
+            f"{k}={v}" for k, v in counts.items() if v
+        )
+        lines = [summary if any(counts.values()) else f"[{channel}] queue is empty"]
+        for t in tasks:
+            lines.append(
+                f"  {t.id} · {t.status.value} · attempt {t.attempts}/{t.max_attempts}"
+            )
+        return _tool_output(
+            "\n".join(lines),
+            {
+                "channel": channel,
+                "counts": counts,
+                "tasks": [task_to_dict(t, include_payload=False) for t in tasks],
+            },
             structured=structured,
         )
 

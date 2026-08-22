@@ -210,7 +210,12 @@ before making support claims.
 | `bridge_channels` | List active channels and counts |
 | `bridge_ping` | Check bridge health and capabilities |
 | `bridge_status` | Summarize recent activity across channels |
-| `bridge_clear` | Delete every message in one channel |
+| `bridge_clear` | Delete every message (and task) in one channel |
+| `bridge_enqueue` | Add a task to a channel's work queue (exclusive; claimed once) |
+| `bridge_claim` | Atomically claim the next task with a lease; long-poll with `wait_seconds` |
+| `bridge_complete` | Mark a claimed task done, fenced by its `lease_token` |
+| `bridge_fail` | Fail a claimed task — requeue with backoff, or dead-letter |
+| `bridge_tasks` | Inspect a channel's queue: per-status counts and a task list |
 
 Tool results include structured data for clients that support MCP structured
 content and a readable text representation for compatibility.
@@ -260,6 +265,44 @@ it does not make arbitrary external side effects exactly once.
 
 The complete envelope, retry, cursor, and retention contract is documented in
 [protocol reference](https://github.com/constripacity/Claude-Bridge/blob/main/docs/PROTOCOL.md).
+
+### Task queue (work distribution)
+
+Messages fan out — every consumer cursor sees every message. A **task queue** is
+the opposite: each task is claimed by exactly one worker. Point a fleet of worker
+agents at a channel and they share the work without ever double-processing it.
+
+The orchestrator enqueues tasks (dedup-safe with an idempotency key):
+
+```text
+bridge_enqueue(
+  channel="builds",
+  payload={"repo": "payments", "action": "run_tests"},
+  max_attempts=3,
+  idempotency_key="build-802"
+)
+```
+
+Each worker claims the next task, holding a lease (a visibility timeout). Two
+workers never get the same task; `wait_seconds` long-polls an empty queue:
+
+```text
+bridge_claim(channel="builds", consumer="worker-3", lease_seconds=300, wait_seconds=20)
+# -> { task_id, payload, attempts, lease_token, lease_expires_at }
+```
+
+It finishes before the lease expires — `complete` on success, `fail` to retry —
+both fenced by the `lease_token`, so a reclaimed task can't be clobbered:
+
+```text
+bridge_complete(channel="builds", task_id="tsk_…", lease_token="…", result={"passed": 105})
+bridge_fail(channel="builds", task_id="tsk_…", lease_token="…", requeue=true, retry_delay_seconds=30)
+```
+
+If a worker crashes and never resolves its task, the lease expires and the task
+is requeued automatically — or dead-lettered once `max_attempts` is exhausted.
+This is **at-least-once** delivery, so make task handlers idempotent.
+`bridge_tasks(channel="builds")` shows the queue's per-status counts.
 
 ## Channels
 

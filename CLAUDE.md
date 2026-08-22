@@ -63,6 +63,11 @@ Channel names and recipients route messages; they are not access-control rules.
 | `bridge_wait` | Wait for new work without rapid repeated polling |
 | `bridge_ack` | Advance this consumer's durable position after processing |
 | `bridge_clear` | Destructively delete a channel; use only with explicit authority |
+| `bridge_enqueue` | Add an exclusive task to a channel's work queue |
+| `bridge_claim` | Atomically claim the next task with a lease (one worker per task) |
+| `bridge_complete` | Finish a claimed task, fenced by its lease token |
+| `bridge_fail` | Fail a claimed task; requeue with backoff or dead-letter |
+| `bridge_tasks` | Inspect a channel's queue counts and tasks |
 
 Prefer `bridge_wait` while idle. Use `bridge_receive` for a bounded startup
 snapshot or explicit resynchronization.
@@ -203,6 +208,27 @@ bridge_send(
 
 References do not transfer artifact bytes. The receiving side must be able to
 resolve the URI and should verify a supplied digest.
+
+## Task queue (work distribution)
+
+Messages fan out to every consumer; a **task** is exclusive — claimed by exactly
+one worker. Use the queue when a fleet must share work without double-processing.
+
+- **Orchestrator** — `bridge_enqueue(channel, payload=…, max_attempts=N,
+  idempotency_key=…)`. Give a stable `idempotency_key` so a retried enqueue does
+  not create a duplicate. Use `priority` and `delay_seconds` when ordering or a
+  delay matters.
+- **Worker** — `bridge_claim(channel, consumer, lease_seconds, wait_seconds)`.
+  You hold the task for `lease_seconds` (the visibility timeout) and get a
+  `lease_token`. Do the work, then `bridge_complete(channel, task_id,
+  lease_token, result=…)` on success, or `bridge_fail(channel, task_id,
+  lease_token, requeue=true|false)` on error. Finish before the lease expires.
+- **At-least-once** — if you crash or the lease expires, the task is requeued (or
+  dead-lettered past `max_attempts`) and another worker gets it. Make task
+  handlers idempotent; the `lease_token` fences a stale worker from completing a
+  task that was already reclaimed.
+- Pick a `lease_seconds` per task class: long enough to finish, short enough to
+  recover quickly. `bridge_tasks(channel)` shows queue depth by status.
 
 ## Recovery
 

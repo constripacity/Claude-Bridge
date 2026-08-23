@@ -42,6 +42,14 @@ from .validation import (
 
 TASKQUEUE_SCHEMA_VERSION = 1
 
+# Upper bounds on integer parameters. Counts stay well within SQLite's 64-bit
+# INTEGER; seconds-valued fields stay far under the range where
+# ``timedelta(seconds=…)`` added to a current datetime overflows. Exceeding
+# either now raises a structured BridgeValidationError instead of a raw
+# OverflowError from the INSERT or the timedelta arithmetic.
+_MAX_COUNT = 2**31 - 1
+_MAX_TASK_SECONDS = 10**9  # ~31.7 years; larger than any legitimate delay/lease
+
 
 class TaskQueueError(RuntimeError):
     """Base class for task-queue failures safe to handle explicitly."""
@@ -323,13 +331,17 @@ class TaskStore:
     ) -> EnqueueResult:
         channel = validate_channel(channel)
         payload = _require_text(payload, "payload", DEFAULT_LIMITS.max_message_bytes)
-        priority = validate_non_negative_int(priority, "priority")
-        max_attempts = validate_non_negative_int(max_attempts, "max_attempts")
+        priority = validate_non_negative_int(priority, "priority", maximum=_MAX_COUNT)
+        max_attempts = validate_non_negative_int(
+            max_attempts, "max_attempts", maximum=_MAX_COUNT
+        )
         if max_attempts < 1:
             raise BridgeValidationError(
                 "max_attempts", "out_of_range", "must be at least 1"
             )
-        delay_seconds = validate_non_negative_int(delay_seconds, "delay_seconds")
+        delay_seconds = validate_non_negative_int(
+            delay_seconds, "delay_seconds", maximum=_MAX_TASK_SECONDS
+        )
         if idempotency_key is not None:
             idempotency_key = validate_reference(idempotency_key, "idempotency_key")
         if enqueued_by is not None:
@@ -382,7 +394,9 @@ class TaskStore:
     ) -> Task | None:
         channel = validate_channel(channel)
         consumer = validate_consumer(consumer)
-        lease_seconds = validate_non_negative_int(lease_seconds, "lease_seconds")
+        lease_seconds = validate_non_negative_int(
+            lease_seconds, "lease_seconds", maximum=_MAX_TASK_SECONDS
+        )
         if lease_seconds < 1:
             raise BridgeValidationError(
                 "lease_seconds", "out_of_range", "must be at least 1"
@@ -460,7 +474,7 @@ class TaskStore:
         if error is not None:
             error = _require_text(error, "error", DEFAULT_LIMITS.max_message_bytes)
         retry_delay_seconds = validate_non_negative_int(
-            retry_delay_seconds, "retry_delay_seconds"
+            retry_delay_seconds, "retry_delay_seconds", maximum=_MAX_TASK_SECONDS
         )
         instant = _as_utc(now or _utc_now())
         now_iso = _timestamp(instant)

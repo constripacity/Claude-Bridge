@@ -914,8 +914,10 @@ async def acknowledge_message_reliable(
 
 
 def _clamp_lease_seconds(value: int | None) -> int:
+    # The default is clamped to the max too, so a DEFAULT > MAX misconfiguration
+    # can never hand out a lease longer than the configured ceiling.
     if value is None:
-        return DEFAULT_LEASE_SECONDS
+        return min(DEFAULT_LEASE_SECONDS, MAX_LEASE_SECONDS)
     lease = validate_non_negative_int(value, "lease_seconds")
     if lease < 1:
         raise BridgeValidationError(
@@ -1118,20 +1120,32 @@ async def audit_retention_sweep_once() -> int:
 async def housekeeping_sweep_once() -> tuple[int, int, int, int, int]:
     messages = await retention_sweep_once()
     audit_rows = await audit_retention_sweep_once()
+    conn = db()
     async with _write_lock:
-        idempotency = reliability_store().cleanup_expired_idempotency(limit=10_000)
-        event_cutoff = _retention_cutoff_iso(SETTINGS.event_retention_days)
-        events = db().execute(
-            "DELETE FROM bridge_events WHERE timestamp < ?", (event_cutoff,)
-        ).rowcount
-        # Task queue: requeue (or dead-letter) leases past their visibility
-        # timeout so abandoned work is retried even when no one is claiming, and
-        # prune finished tasks under the same retention window as messages.
-        task_sweep = task_store().requeue_expired(limit=10_000)
-        if RETENTION_DAYS > 0:
-            task_store().prune_terminal(
-                older_than_iso=_retention_cutoff_iso(RETENTION_DAYS), limit=10_000
-            )
+        # Acquire the writer slot with bounded backoff (like every other write
+        # path) so a momentary cross-process contention delays the sweep rather
+        # than aborting the whole cycle until the next tick, and so the batch of
+        # cleanups commits atomically.
+        await _begin_immediate(conn)
+        try:
+            idempotency = reliability_store().cleanup_expired_idempotency(limit=10_000)
+            event_cutoff = _retention_cutoff_iso(SETTINGS.event_retention_days)
+            events = conn.execute(
+                "DELETE FROM bridge_events WHERE timestamp < ?", (event_cutoff,)
+            ).rowcount
+            # Task queue: requeue (or dead-letter) leases past their visibility
+            # timeout so abandoned work is retried even when no one is claiming,
+            # and prune finished tasks under the message retention window.
+            task_sweep = task_store().requeue_expired(limit=10_000)
+            if RETENTION_DAYS > 0:
+                task_store().prune_terminal(
+                    older_than_iso=_retention_cutoff_iso(RETENTION_DAYS), limit=10_000
+                )
+            conn.commit()
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
     sessions = _dashboard_sessions.cleanup()
     if task_sweep.requeued:
         await _notify_task_waiters()
@@ -1412,13 +1426,19 @@ async def list_tools() -> list[Tool]:
                     "priority": {
                         "type": "integer",
                         "minimum": 0,
+                        "maximum": 2147483647,
                         "default": 0,
                         "description": "Higher priority is claimed sooner",
                     },
-                    "max_attempts": {"type": "integer", "minimum": 1},
+                    "max_attempts": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 2147483647,
+                    },
                     "delay_seconds": {
                         "type": "integer",
                         "minimum": 0,
+                        "maximum": 1000000000,
                         "default": 0,
                         "description": "Delay before the task becomes claimable",
                     },
@@ -1524,6 +1544,7 @@ async def list_tools() -> list[Tool]:
                     "retry_delay_seconds": {
                         "type": "integer",
                         "minimum": 0,
+                        "maximum": 1000000000,
                         "default": 0,
                     },
                 },

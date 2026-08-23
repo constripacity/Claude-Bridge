@@ -286,3 +286,52 @@ def test_status_invariant_holds_across_lifecycle(fresh_db):
     c2 = store.claim(channel="q", consumer="w", lease_seconds=5, now=at(2))
     t2 = store.complete(channel="q", task_id=c2.id, lease_token=c2.lease_token, now=at(3))
     assert t2.status is TaskStatus.COMPLETED and t2.lease_token is None
+
+
+# ── Hardening (from the v1.3.0 adversarial review) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_out_of_range_int_params_are_structured_errors(fresh_db):
+    """Huge ints must surface as BridgeValidationError, not a raw OverflowError."""
+    cases = [
+        ("delay_seconds", {"channel": "q", "content": "a", "delay_seconds": 10**12}),
+        ("priority", {"channel": "q", "content": "a", "priority": 2**63}),
+        ("max_attempts", {"channel": "q", "content": "a", "max_attempts": 2**63}),
+    ]
+    for field, args in cases:
+        with pytest.raises(BridgeValidationError) as excinfo:
+            await call("bridge_enqueue", args)
+        assert excinfo.value.field == field
+        assert excinfo.value.code == "out_of_range"
+
+
+@pytest.mark.asyncio
+async def test_fail_retry_delay_out_of_range_is_structured(fresh_db):
+    await call("bridge_enqueue", {"channel": "q", "content": "a"})
+    c = await call(
+        "bridge_claim", {"channel": "q", "consumer": "w", "lease_seconds": 60}
+    )
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await call(
+            "bridge_fail",
+            {"channel": "q", "task_id": c["task"]["task_id"],
+             "lease_token": c["task"]["lease_token"], "retry_delay_seconds": 10**12},
+        )
+    assert excinfo.value.field == "retry_delay_seconds"
+
+
+def test_store_claim_rejects_out_of_range_lease(fresh_db):
+    store = bridge.task_store()
+    store.enqueue(channel="q", payload="a", now=at(0))
+    with pytest.raises(BridgeValidationError) as excinfo:
+        store.claim(channel="q", consumer="w", lease_seconds=10**12, now=at(0))
+    assert excinfo.value.field == "lease_seconds"
+
+
+def test_default_lease_is_clamped_to_max(monkeypatch):
+    monkeypatch.setattr(bridge, "DEFAULT_LEASE_SECONDS", 5000)
+    monkeypatch.setattr(bridge, "MAX_LEASE_SECONDS", 3600)
+    assert bridge._clamp_lease_seconds(None) == 3600  # default clamped down
+    assert bridge._clamp_lease_seconds(10000) == 3600  # explicit clamped down
+    assert bridge._clamp_lease_seconds(100) == 100  # within range, untouched

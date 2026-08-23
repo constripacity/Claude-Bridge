@@ -277,11 +277,17 @@ def validate_sha256(value: Any, *, field: str = "sha256") -> str:
     return result
 
 
-def validate_non_negative_int(value: Any, field: str) -> int:
+def validate_non_negative_int(
+    value: Any, field: str, *, maximum: int | None = None
+) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise BridgeValidationError(field, "invalid_type", "must be an integer")
     if value < 0:
         raise BridgeValidationError(field, "out_of_range", "must be non-negative")
+    if maximum is not None and value > maximum:
+        raise BridgeValidationError(
+            field, "out_of_range", f"must be at most {maximum}"
+        )
     return value
 
 

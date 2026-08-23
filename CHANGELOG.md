@@ -6,33 +6,33 @@ versioning where the Python packaging format allows.
 
 ## [1.3.0] - 2026-08-23
 
-Task queue — the first step from a message bus toward an agent-orchestration
+Task queue: the first step from a message bus toward an agent orchestration
 platform. No breaking changes; every existing tool and transport is unchanged.
 
 ### Added
 
-- **Task queue / work distribution.** A channel can now act as an *exclusive*
+- **Task queue and work distribution.** A channel can now act as an *exclusive*
   work queue: an orchestrator enqueues tasks and a fleet of worker agents
   atomically claim them, so no two workers ever process the same task. Five new
   MCP tools (13 total):
-  - `bridge_enqueue` — add a task (structured `payload` or string `content`) with
+  - `bridge_enqueue`: add a task (structured `payload` or string `content`) with
     `priority`, `max_attempts`, `delay_seconds`, and an optional `idempotency_key`
     that dedupes a retried enqueue.
-  - `bridge_claim` — atomically claim the oldest eligible task; holds a lease for
-    `lease_seconds` (a visibility timeout) and returns a `lease_token`. Set
-    `wait_seconds` to long-poll for work instead of busy-claiming.
-  - `bridge_complete` / `bridge_fail` — resolve a claimed task, **fenced by the
-    `lease_token`** so a worker whose lease expired and was reclaimed cannot
-    clobber the result. `fail` requeues (with `retry_delay_seconds` backoff) until
-    `max_attempts` is exhausted, then dead-letters; `requeue=false` dead-letters
-    immediately.
-  - `bridge_tasks` — inspect a channel's queue (per-status counts + a task list).
-- **At-least-once semantics.** An unacknowledged lease is requeued (or
-  dead-lettered past `max_attempts`) lazily at the next claim and by the
+  - `bridge_claim`: atomically claim the oldest eligible task. It holds a lease
+    for `lease_seconds` (a visibility timeout) and returns a `lease_token`. Set
+    `wait_seconds` to long poll for work instead of claiming in a loop.
+  - `bridge_complete` and `bridge_fail`: resolve a claimed task, **fenced by the
+    `lease_token`**, so a worker whose lease expired and was reclaimed cannot
+    clobber the result. `bridge_fail` requeues (with a `retry_delay_seconds`
+    backoff) until `max_attempts` is reached, then moves the task to the dead
+    queue; `requeue=false` moves it there immediately.
+  - `bridge_tasks`: inspect a channel's queue (counts by status plus a task list).
+- **At least once semantics.** An unacknowledged lease is requeued (or moved to
+  the dead queue past `max_attempts`) lazily at the next claim and by the
   background housekeeping sweep, so a crashed worker's task is retried. Workers
   must therefore be idempotent.
 - New `tasks` table and a `TaskStore` (`claude_bridge/taskqueue.py`) built on the
-  same single-writer + savepoint discipline as message inserts; `bridge_clear`
+  same single writer and savepoint discipline as message inserts. `bridge_clear`
   now also resets a channel's queue, and task retention rides the message
   retention window.
 - Config: `CLAUDE_BRIDGE_DEFAULT_LEASE_SECONDS` (300), `CLAUDE_BRIDGE_MAX_LEASE_SECONDS`

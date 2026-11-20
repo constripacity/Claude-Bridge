@@ -215,6 +215,7 @@ before making support claims.
 | `bridge_claim` | Atomically claim the next task with a lease; long-poll with `wait_seconds` |
 | `bridge_complete` | Mark a claimed task done, fenced by its `lease_token` |
 | `bridge_fail` | Fail a claimed task — requeue with backoff, or dead-letter |
+| `bridge_replace` | Replace a pending task's payload in place (original enqueuer only; resets `attempts`, needs `enqueued_by`) |
 | `bridge_tasks` | Inspect a channel's queue: per-status counts and a task list |
 
 Tool results include structured data for clients that support MCP structured
@@ -303,6 +304,8 @@ If a worker crashes and never resolves its task, the lease expires and the task
 is requeued automatically — or dead-lettered once `max_attempts` is exhausted.
 This is **at-least-once** delivery, so make task handlers idempotent.
 `bridge_tasks(channel="builds")` shows the queue's per-status counts.
+Until a worker claims it, the enqueuer can swap a task's payload in place with
+`bridge_replace(channel, task_id, sender=<enqueued_by>, payload=…)`.
 
 ## Channels
 

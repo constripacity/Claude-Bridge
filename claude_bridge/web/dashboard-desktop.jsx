@@ -292,7 +292,7 @@ function MessageRow({ m, selected, onSelect }) {
       <span title={m.ts} style={{
         fontFamily: 'var(--mono)', fontSize: 11,
         color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums',
-      }}>{fmtTs(m.ts)}</span>
+      }}>{m.ts}</span>
 
       <SenderPill name={m.sender} size="sm" />
 
@@ -454,7 +454,7 @@ function Inspector({ detail }) {
       </div>
     );
   }
-  const ts = fmtTs(detail.ts, true);
+  const ts = detail.ts_full || detail.ts;
   return (
     <div style={{
       width: 360, background: 'var(--bg-base)',

@@ -113,7 +113,7 @@ function MobileMessageRow({ m, selected, onSelect }) {
           marginLeft: 'auto',
           fontFamily: 'var(--mono)', fontSize: 10,
           color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums',
-        }}>{fmtTs(m.ts)}</span>
+        }}>{m.ts}</span>
         {m.is_json && (
           <span style={{
             fontFamily: 'var(--mono)', fontSize: 8.5,

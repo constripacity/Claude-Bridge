@@ -67,6 +67,7 @@ Channel names and recipients route messages; they are not access-control rules.
 | `bridge_claim` | Atomically claim the next task with a lease (one worker per task) |
 | `bridge_complete` | Finish a claimed task, fenced by its lease token |
 | `bridge_fail` | Fail a claimed task; requeue with backoff or dead-letter |
+| `bridge_replace` | Replace a pending task's payload; only its original enqueuer |
 | `bridge_tasks` | Inspect a channel's queue counts and tasks |
 
 Prefer `bridge_wait` while idle. Use `bridge_receive` for a bounded startup

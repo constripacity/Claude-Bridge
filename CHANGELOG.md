@@ -4,6 +4,15 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
+## [Unreleased]
+
+### Added
+
+- `bridge_replace`: the original enqueuer (`sender` equal to `enqueued_by`) can
+  replace a still-pending task's payload, and optionally its `priority` and
+  `delay_seconds`, in place, and resets `attempts`. Claimed or finished tasks and
+  tasks enqueued without `enqueued_by` are rejected.
+
 ## [1.3.0] - 2026-08-23
 
 Task queue: the first step from a message bus toward an agent orchestration

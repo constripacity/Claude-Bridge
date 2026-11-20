@@ -13,7 +13,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import claude_bridge.server as bridge
-from claude_bridge.taskqueue import TaskStatus
+from claude_bridge.taskqueue import (
+    TaskNotFoundError,
+    TaskPermissionError,
+    TaskStateError,
+    TaskStatus,
+)
 from claude_bridge.validation import BridgeValidationError
 
 T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -199,6 +204,100 @@ async def test_claim_long_poll_wakes_on_enqueue(fresh_db):
     assert claim["task"] is not None and claim["task"]["payload"] == "late"
 
 
+@pytest.mark.asyncio
+async def test_claim_long_poll_wakes_on_replace_of_delayed_task(fresh_db):
+    enq = await call(
+        "bridge_enqueue",
+        {"channel": "jobs", "content": "old", "enqueued_by": "orch", "delay_seconds": 3600},
+    )
+
+    async def replacer():
+        await asyncio.sleep(0.1)
+        await call(
+            "bridge_replace",
+            {"channel": "jobs", "task_id": enq["task_id"], "sender": "orch",
+             "content": "new", "delay_seconds": 0},
+        )
+
+    task = asyncio.create_task(replacer())
+    claim = await call(
+        "bridge_claim",
+        {"channel": "jobs", "consumer": "w", "lease_seconds": 60, "wait_seconds": 5},
+    )
+    await task
+    assert claim["task"] is not None and claim["task"]["payload"] == "new"
+
+
+@pytest.mark.asyncio
+async def test_replace_swaps_pending_payload_in_place(fresh_db):
+    enq = await call(
+        "bridge_enqueue", {"channel": "jobs", "content": "old", "enqueued_by": "orch"}
+    )
+    replaced = await call(
+        "bridge_replace",
+        {"channel": "jobs", "task_id": enq["task_id"], "sender": "orch",
+         "payload": {"v": 2}},
+    )
+    assert replaced["task_id"] == enq["task_id"] and replaced["status"] == "pending"
+    claim = await call(
+        "bridge_claim", {"channel": "jobs", "consumer": "w", "lease_seconds": 60}
+    )
+    assert claim["task"]["payload"] == '{"v":2}'
+
+
+@pytest.mark.asyncio
+async def test_replace_maps_store_errors_to_structured_errors(fresh_db):
+    enq = await call(
+        "bridge_enqueue", {"channel": "jobs", "content": "a", "enqueued_by": "orch"}
+    )
+    args = {"channel": "jobs", "task_id": enq["task_id"], "content": "b"}
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await call("bridge_replace", {**args, "sender": "intruder"})
+    assert excinfo.value.field == "sender" and excinfo.value.code == "forbidden"
+
+    await call("bridge_claim", {"channel": "jobs", "consumer": "w", "lease_seconds": 60})
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await call("bridge_replace", {**args, "sender": "orch"})
+    assert excinfo.value.field == "task_id" and excinfo.value.code == "not_pending"
+
+
+@pytest.mark.asyncio
+async def test_replace_unknown_task_maps_to_not_found(fresh_db):
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await call(
+            "bridge_replace",
+            {"channel": "jobs", "task_id": "missing", "sender": "orch", "content": "x"},
+        )
+    assert excinfo.value.field == "task_id" and excinfo.value.code == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_replace_with_priority_only_keeps_delay(fresh_db):
+    enq = await call(
+        "bridge_enqueue",
+        {"channel": "jobs", "content": "a", "enqueued_by": "orch", "delay_seconds": 3600},
+    )
+    replaced = await call(
+        "bridge_replace",
+        {"channel": "jobs", "task_id": enq["task_id"], "sender": "orch",
+         "content": "b", "priority": 7},
+    )
+    assert replaced["priority"] == 7
+    assert replaced["available_at"] == enq["available_at"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [{}, {"payload": {"a": 1}, "content": "x"}])
+async def test_replace_schema_requires_exactly_one_of_payload_and_content(extra):
+    import jsonschema
+
+    tools = await bridge.list_tools()
+    schema = next(t for t in tools if t.name == "bridge_replace").inputSchema
+    args = {"channel": "jobs", "task_id": "t", "sender": "orch", **extra}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(args, schema)
+
+
 # ── Time-dependent behaviour (store level, injected ``now``) ───────────────────
 
 
@@ -286,6 +385,55 @@ def test_status_invariant_holds_across_lifecycle(fresh_db):
     c2 = store.claim(channel="q", consumer="w", lease_seconds=5, now=at(2))
     t2 = store.complete(channel="q", task_id=c2.id, lease_token=c2.lease_token, now=at(3))
     assert t2.status is TaskStatus.COMPLETED and t2.lease_token is None
+
+
+def test_replace_keeps_identity_and_resets_progress(fresh_db):
+    store = bridge.task_store()
+    enq = store.enqueue(channel="q", payload="A", enqueued_by="orch", now=at(0)).task
+    c = store.claim(channel="q", consumer="w", lease_seconds=60, now=at(0))
+    failed = store.fail(
+        channel="q", task_id=c.id, lease_token=c.lease_token, error="x", now=at(1)
+    )
+    t = store.replace(channel="q", task_id=enq.id, sender="orch", payload="B", now=at(2))
+    assert (t.id, t.seq, t.payload, t.status) == (enq.id, enq.seq, "B", TaskStatus.PENDING)
+    assert t.attempts == 0 and t.last_error is None
+    assert t.priority == failed.priority and t.available_at == failed.available_at
+
+
+def test_replace_changes_priority_and_delay(fresh_db):
+    store = bridge.task_store()
+    enq = store.enqueue(channel="q", payload="A", enqueued_by="orch", now=at(0)).task
+    store.replace(
+        channel="q", task_id=enq.id, sender="orch", payload="B",
+        priority=7, delay_seconds=30, now=at(10),
+    )
+    assert store.claim(channel="q", consumer="w", lease_seconds=5, now=at(39)) is None
+    claimed = store.claim(channel="q", consumer="w", lease_seconds=5, now=at(40))
+    assert claimed.payload == "B" and claimed.priority == 7
+
+
+def test_replace_rejects_wrong_sender(fresh_db):
+    store = bridge.task_store()
+    enq = store.enqueue(channel="q", payload="A", enqueued_by="orch", now=at(0)).task
+    with pytest.raises(TaskPermissionError):
+        store.replace(channel="q", task_id=enq.id, sender="other", payload="B")
+    assert store.list_tasks(channel="q")[0].payload == "A"
+
+
+def test_replace_rejects_claimed_task_with_its_status(fresh_db):
+    store = bridge.task_store()
+    enq = store.enqueue(channel="q", payload="A", enqueued_by="orch", now=at(0)).task
+    store.claim(channel="q", consumer="w", lease_seconds=60, now=at(0))
+    with pytest.raises(TaskStateError) as excinfo:
+        store.replace(channel="q", task_id=enq.id, sender="orch", payload="B")
+    assert excinfo.value.status is TaskStatus.CLAIMED
+
+
+def test_replace_unknown_task_reports_not_found(fresh_db):
+    with pytest.raises(TaskNotFoundError):
+        bridge.task_store().replace(
+            channel="q", task_id="tsk_missing", sender="orch", payload="B"
+        )
 
 
 # ── Hardening (from the v1.3.0 adversarial review) ────────────────────────────

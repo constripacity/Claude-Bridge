@@ -1623,6 +1623,12 @@ def _format_message_rows(channel: str, rows: list[sqlite3.Row]) -> str:
     return f"[{channel}] — {len(rows)} message(s)\n" + "\n".join(lines).rstrip()
 
 
+def _task_payload(arguments: dict[str, Any]) -> str:
+    if "payload" in arguments:
+        return canonical_json(arguments["payload"], field="payload")
+    return arguments["content"]
+
+
 async def dispatch_tool(
     name: str,
     arguments: dict[str, Any],
@@ -1877,13 +1883,9 @@ async def dispatch_tool(
     # ── bridge_enqueue ───────────────────────────────────────────────────────
     elif name == "bridge_enqueue":
         channel = validate_channel(arguments["channel"])
-        if "payload" in arguments:
-            payload = canonical_json(arguments["payload"], field="payload")
-        else:
-            payload = arguments["content"]
         outcome = await enqueue_task_reliable(
             channel=channel,
-            payload=payload,
+            payload=_task_payload(arguments),
             priority=arguments.get("priority", 0),
             max_attempts=arguments.get("max_attempts"),
             delay_seconds=arguments.get("delay_seconds", 0),

@@ -28,6 +28,10 @@ versioning where the Python packaging format allows.
   `worked_by` and `notes_read_seq`. An older database upgrades in place at
   startup; the task-queue schema version stays 1, so a 1.3.0 server can still
   open the upgraded database.
+- Rollback note: a 1.3.0 server ignores notes. Tasks it prunes leave their notes
+  behind (the sweep deletes them after an upgrade again), and a task it claims
+  keeps the note cursor of the lease before, so `bridge_task_notes` can skip notes
+  up to that cursor until the next claim, which delivers all notes again.
 
 ## [1.3.0] - 2026-08-23
 

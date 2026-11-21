@@ -25,6 +25,13 @@ def ensure_participants_schema(conn: sqlite3.Connection) -> None:
     )
 
 
+# Tasks the participant row holds a live lease on; `:now` is bound per query.
+_LIVE_LEASE = (
+    "FROM tasks WHERE tasks.lease_owner = participants.name "
+    "AND tasks.status = 'claimed' AND tasks.lease_expires_at > :now "
+)
+
+
 def _now_iso() -> str:
     # Same fixed-width format as task timestamps, so text order is time order.
     stamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
@@ -44,6 +51,10 @@ class ParticipantStore:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
+
+    @property
+    def conn(self) -> sqlite3.Connection:
+        return self._conn
 
     def touch(self, name: str) -> None:
         """Record activity without changing what the participant works on."""
@@ -68,17 +79,13 @@ class ParticipantStore:
 
         This one pass covers complete, fail, lease expiry and channel clear.
         """
-        live_lease = (
-            "FROM tasks WHERE tasks.lease_owner = participants.name "
-            "AND tasks.status = 'claimed' AND tasks.lease_expires_at > :now "
-        )
         self._conn.execute(
             "UPDATE participants SET "
-            f"current_task_id = (SELECT id {live_lease} ORDER BY seq DESC LIMIT 1), "
-            f"current_channel = COALESCE((SELECT channel {live_lease} "
+            f"current_task_id = (SELECT id {_LIVE_LEASE} ORDER BY seq DESC LIMIT 1), "
+            f"current_channel = COALESCE((SELECT channel {_LIVE_LEASE} "
             "ORDER BY seq DESC LIMIT 1), current_channel) "
             "WHERE current_task_id IS NOT NULL AND NOT EXISTS (SELECT 1 "
-            f"{live_lease} AND tasks.id = participants.current_task_id)",
+            f"{_LIVE_LEASE} AND tasks.id = participants.current_task_id)",
             {"now": _now_iso()},
         )
 

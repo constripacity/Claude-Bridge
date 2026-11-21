@@ -25,7 +25,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Iterator
@@ -313,38 +313,16 @@ class SweepResult:
     dead_lettered: int
 
 
-_TASK_COLUMNS = (
-    "seq, id, channel, payload, status, priority, attempts, max_attempts, "
-    "available_at, lease_owner, lease_token, lease_expires_at, result, "
-    "last_error, idempotency_key, enqueued_by, created_at, updated_at, worked_by, "
-    "notes_read_seq"
-)
+# One column order for SELECT and row mapping: the field order of Task.
+_TASK_FIELDS = tuple(field.name for field in fields(Task))
+_TASK_COLUMNS = ", ".join(_TASK_FIELDS)
 _TASK_SELECT = f"SELECT {_TASK_COLUMNS} FROM tasks "
 
 
 def _task_from_row(row: sqlite3.Row | tuple) -> Task:
-    return Task(
-        seq=int(row[0]),
-        id=row[1],
-        channel=row[2],
-        payload=row[3],
-        status=TaskStatus(row[4]),
-        priority=int(row[5]),
-        attempts=int(row[6]),
-        max_attempts=int(row[7]),
-        available_at=row[8],
-        lease_owner=row[9],
-        lease_token=row[10],
-        lease_expires_at=row[11],
-        result=row[12],
-        last_error=row[13],
-        idempotency_key=row[14],
-        enqueued_by=row[15],
-        created_at=row[16],
-        updated_at=row[17],
-        worked_by=row[18],
-        notes_read_seq=int(row[19]),
-    )
+    values = dict(zip(_TASK_FIELDS, tuple(row), strict=True))
+    values["status"] = TaskStatus(values["status"])
+    return Task(**values)
 
 
 _NOTE_SELECT = (
@@ -661,17 +639,17 @@ class TaskStore:
 
     def all_notes(self, task: Task) -> list[TaskNote]:
         """Every note of the task in send order."""
-        return self._notes_after(task, 0)
+        return self._notes_after(task.id, 0)
 
     def unread_notes(self, task: Task) -> list[TaskNote]:
         """Notes the current (or last) lease has not seen yet."""
-        return self._notes_after(task, task.notes_read_seq)
+        return self._notes_after(task.id, task.notes_read_seq)
 
-    def _notes_after(self, task: Task, seq: int) -> list[TaskNote]:
+    def _notes_after(self, task_id: str, seq: int) -> list[TaskNote]:
         with self._lock:
             rows = self.conn.execute(
                 _NOTE_SELECT + "WHERE task_id = ? AND seq > ? ORDER BY seq",
-                (task.id, seq),
+                (task_id, seq),
             ).fetchall()
         return [_note_from_row(r) for r in rows]
 
@@ -781,6 +759,14 @@ class TaskStore:
             return self.conn.execute(
                 f"DELETE FROM tasks WHERE rowid IN ({doomed})",
                 (older_than_iso, limit),
+            ).rowcount
+
+    def delete_orphan_notes(self) -> int:
+        """Delete notes whose task is gone, e.g. pruned by a server without notes."""
+        with self._lock, _savepoint(self.conn):
+            return self.conn.execute(
+                "DELETE FROM task_notes WHERE NOT EXISTS "
+                "(SELECT 1 FROM tasks WHERE tasks.id = task_notes.task_id)"
             ).rowcount
 
     def delete_channel(self, *, channel: str) -> int:

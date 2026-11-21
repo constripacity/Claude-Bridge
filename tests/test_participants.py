@@ -210,3 +210,7 @@ async def test_text_output_names_the_task_and_its_channel(fresh_db):
 async def test_tool_listing_declares_bridge_participants_read_only():
     tools = {tool.name: tool for tool in await bridge.list_tools()}
     assert tools["bridge_participants"].annotations.readOnlyHint is True
+
+
+def test_participant_store_is_cached_per_connection(fresh_db):
+    assert bridge.participant_store() is bridge.participant_store()

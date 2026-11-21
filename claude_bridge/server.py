@@ -178,6 +178,7 @@ _message_conditions: weakref.WeakKeyDictionary[
 ] = weakref.WeakKeyDictionary()
 _reliability: ReliabilityStore | None = None
 _taskstore: TaskStore | None = None
+_participantstore: ParticipantStore | None = None
 _task_conditions: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, asyncio.Condition
 ] = weakref.WeakKeyDictionary()
@@ -395,7 +396,11 @@ def task_store() -> TaskStore:
 
 def participant_store() -> ParticipantStore:
     """Return the participant repository; callers own the write transaction."""
-    return ParticipantStore(db())
+    global _participantstore
+    conn = db()
+    if _participantstore is None or _participantstore.conn is not conn:
+        _participantstore = ParticipantStore(conn)
+    return _participantstore
 
 
 async def _begin_immediate(conn: sqlite3.Connection, attempts: int = 7) -> None:
@@ -1154,8 +1159,15 @@ def _notes_text(heading: str, notes: list[TaskNote]) -> str:
     if not notes:
         return ""
     heading_line = f"  {heading} ({len(notes)}):"
-    note_lines = [f"  [{n.seq}] {n.sender} @ {n.created_at}: {n.content}" for n in notes]
+    note_lines = [
+        f"  [{n.seq}] {n.sender} @ {n.created_at}: {_indented(n.content)}" for n in notes
+    ]
     return "\n" + "\n".join([heading_line, *note_lines])
+
+
+def _indented(text: str) -> str:
+    # Continuation lines sit deeper than any output field, so a note cannot fake one.
+    return "\n      | ".join(text.splitlines())
 
 
 # ── Message retention ────────────────────────────────────────────────────────
@@ -1231,6 +1243,7 @@ async def housekeeping_sweep_once() -> tuple[int, int, int, int, int]:
             # timeout so abandoned work is retried even when no one is claiming,
             # and prune finished tasks under the message retention window.
             task_sweep = task_store().requeue_expired(limit=10_000)
+            task_store().delete_orphan_notes()
             participant_store().reconcile_current_tasks()
             if RETENTION_DAYS > 0:
                 task_store().prune_terminal(
@@ -2217,9 +2230,12 @@ async def dispatch_tool(
                 task_id=arguments["task_id"],
                 lease_token=arguments["lease_token"],
             )
+        if notes:
+            text = f"Task {arguments['task_id']}" + _notes_text("new notes", notes)
+        else:
+            text = f"No new notes on task {arguments['task_id']}"
         return _tool_output(
-            f"{len(notes)} new note(s) on task {arguments['task_id']}"
-            + _notes_text("notes", notes),
+            text,
             {
                 "channel": arguments["channel"],
                 "task_id": arguments["task_id"],

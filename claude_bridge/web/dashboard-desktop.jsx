@@ -13,6 +13,7 @@ import {
   LiveDot,
   SenderPill,
   SENDER_COLORS,
+  fmtTs,
 } from './shared.jsx';
 
 const { useState } = React;

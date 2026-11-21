@@ -148,13 +148,18 @@ def _parse_resets_at(value: Any, field: str) -> str | None:
         )
     try:
         instant = _instant_from(value)
-        # The UTC conversion overflows near datetime.min/max, so it stays in the try.
-        stamp = None if instant.tzinfo is None else utc_timestamp(instant)
     except (ValueError, OverflowError, OSError) as exc:
-        raise BridgeValidationError(field, "invalid", "is not a valid time") from exc
-    if stamp is None:
+        raise _invalid_time(field) from exc
+    if instant.tzinfo is None:
         raise BridgeValidationError(field, "invalid", "must include a UTC offset")
-    return stamp
+    try:
+        return utc_timestamp(instant)
+    except OverflowError as exc:  # The shift to UTC overflows near datetime.min/max.
+        raise _invalid_time(field) from exc
+
+
+def _invalid_time(field: str) -> BridgeValidationError:
+    return BridgeValidationError(field, "invalid", "is not a valid time")
 
 
 def _instant_from(value: float | str) -> datetime:

@@ -431,6 +431,21 @@ def test_replace_rejects_claimed_task_with_its_status(fresh_db):
     assert excinfo.value.status is TaskStatus.CLAIMED
 
 
+@pytest.mark.asyncio
+async def test_replace_errors_word_the_refused_action(fresh_db):
+    enq = await call(
+        "bridge_enqueue", {"channel": "jobs", "content": "a", "enqueued_by": "orch"}
+    )
+    args = {"channel": "jobs", "task_id": enq["task_id"], "content": "b"}
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await call("bridge_replace", {**args, "sender": "intruder"})
+    assert excinfo.value.message == "only the original enqueuer may replace a task"
+    await call("bridge_claim", {"channel": "jobs", "consumer": "w", "lease_seconds": 60})
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await call("bridge_replace", {**args, "sender": "orch"})
+    assert excinfo.value.message == "task is claimed; only pending tasks can be replaced"
+
+
 def test_replace_unknown_task_reports_not_found(fresh_db):
     with pytest.raises(TaskNotFoundError):
         bridge.task_store().replace(

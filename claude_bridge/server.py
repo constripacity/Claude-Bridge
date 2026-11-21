@@ -996,13 +996,14 @@ def _task_errors_as_validation() -> Iterator[None]:
         ) from exc
     except TaskPermissionError as exc:
         raise BridgeValidationError(
-            "sender", "forbidden", "only the original enqueuer may replace a task"
+            "sender", "forbidden", f"only the original enqueuer may {exc.action.value} a task"
         ) from exc
     except TaskStateError as exc:
         raise BridgeValidationError(
             "task_id",
             "not_pending",
-            f"task is {exc.status.value}; only pending tasks can be replaced",
+            f"task is {exc.status.value}; "
+            f"only pending tasks can be {exc.action.past_participle}",
         ) from exc
 
 

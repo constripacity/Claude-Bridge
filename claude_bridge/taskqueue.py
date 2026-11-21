@@ -88,23 +88,41 @@ class TaskNotActiveError(TaskQueueError):
         super().__init__(f"task {task_id!r} is no longer pending or claimed")
 
 
+class TaskAction(str, Enum):
+    """A task change that a caller can be refused."""
+
+    REPLACE = "replace"
+
+    @property
+    def past_participle(self) -> str:
+        return {TaskAction.REPLACE: "replaced"}[self]
+
+
 class TaskPermissionError(TaskQueueError):
     """The caller is not the task's original enqueuer."""
 
-    def __init__(self, channel: str, task_id: str) -> None:
+    def __init__(self, channel: str, task_id: str, action: TaskAction) -> None:
         self.channel = channel
         self.task_id = task_id
-        super().__init__(f"only the original enqueuer may change task {task_id!r}")
+        self.action = action
+        super().__init__(
+            f"only the original enqueuer may {action.value} task {task_id!r}"
+        )
 
 
 class TaskStateError(TaskQueueError):
     """The task's current status does not permit the requested change."""
 
-    def __init__(self, channel: str, task_id: str, status: TaskStatus) -> None:
+    def __init__(
+        self, channel: str, task_id: str, status: TaskStatus, action: TaskAction
+    ) -> None:
         self.channel = channel
         self.task_id = task_id
         self.status = status
-        super().__init__(f"task {task_id!r} is {status.value}, not pending")
+        self.action = action
+        super().__init__(
+            f"cannot {action.value} task {task_id!r}: it is {status.value}"
+        )
 
 
 class TaskStatus(str, Enum):
@@ -787,9 +805,9 @@ class TaskStore:
         if current is None:
             raise TaskNotFoundError(channel, task_id)
         if current.enqueued_by != sender:
-            raise TaskPermissionError(channel, task_id)
+            raise TaskPermissionError(channel, task_id, TaskAction.REPLACE)
         if current.status is not TaskStatus.PENDING:
-            raise TaskStateError(channel, task_id, current.status)
+            raise TaskStateError(channel, task_id, current.status, TaskAction.REPLACE)
         return current
 
     def _raise_fence_error(self, channel: str, task_id: str) -> None:
@@ -942,6 +960,7 @@ __all__ = [
     "SweepResult",
     "TASKQUEUE_SCHEMA_VERSION",
     "Task",
+    "TaskAction",
     "TaskLeaseError",
     "TaskNote",
     "TaskNotActiveError",

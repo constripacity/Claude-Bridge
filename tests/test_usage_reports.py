@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
+import time
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from starlette.testclient import TestClient
 
 import claude_bridge.server as bridge
 from claude_bridge.participants import UsageWindow, parse_usage_report
+from claude_bridge.timestamps import utc_timestamp
 from claude_bridge.validation import BridgeValidationError
 
 from .legacy_schema import create_pre_usage_database
 
 TOKEN = "dummy-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+# Reset times relative to the real clock, as the endpoint checks them against server time.
+SESSION_RESET = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=3)
+WEEKLY_RESET = SESSION_RESET.astimezone(timezone(timedelta(hours=2))) + timedelta(days=5)
 REPORT = {
-    "session": {"used_pct": 42, "resets_at": 1767225600},
-    "weekly": {"used_pct": 17.5, "resets_at": "2026-01-08T00:00:00+02:00"},
+    "session": {"used_pct": 42, "resets_at": int(SESSION_RESET.timestamp())},
+    "weekly": {"used_pct": 17.5, "resets_at": WEEKLY_RESET.isoformat()},
 }
 
 
@@ -52,9 +59,9 @@ def test_usage_report_upserts_and_normalizes_reset_times(client):
 
     assert stored_usage("w1") == (
         42.0,
-        "2026-01-01T00:00:00.000000Z",
+        utc_timestamp(SESSION_RESET),
         17.5,
-        "2026-01-07T22:00:00.000000Z",
+        utc_timestamp(WEEKLY_RESET),
         reported_at,
         reported_at,
     )
@@ -104,6 +111,30 @@ def test_bad_usage_report_is_a_400_naming_the_field(client, body, field):
     assert stored_usage("w1") is None
 
 
+HOUR = 3600
+DAY = 24 * HOUR
+
+
+@pytest.mark.parametrize(
+    "resets_at",
+    [1, time.time() - 2 * DAY, time.time() + 9 * DAY],
+    ids=["1970", "2_days_ago", "9_days_ahead"],
+)
+def test_implausible_reset_time_is_out_of_range(client, resets_at):
+    r = post_usage(client, "w1", {"weekly": {"used_pct": 1, "resets_at": resets_at}})
+    assert r.status_code == 400
+    assert (r.json()["field"], r.json()["code"]) == ("weekly.resets_at", "out_of_range")
+    assert stored_usage("w1") is None
+
+
+@pytest.mark.parametrize(
+    "resets_at", [time.time() + HOUR, time.time() + 6 * DAY], ids=["1_hour_ahead", "6_days_ahead"]
+)
+def test_plausible_reset_time_is_accepted(client, resets_at):
+    r = post_usage(client, "w1", {"weekly": {"used_pct": 1, "resets_at": resets_at}})
+    assert r.status_code == 200
+
+
 def test_bad_participant_name_is_a_400(client):
     r = post_usage(client, "%20padded", REPORT)
     assert r.status_code == 400 and r.json()["field"] == "name"
@@ -133,6 +164,31 @@ def test_empty_report_has_no_windows():
 def test_window_without_reset_time_is_allowed():
     report = parse_usage_report({"session": {"used_pct": 0, "resets_at": None}})
     assert report.session == UsageWindow(used_pct=0.0, resets_at=None)
+
+
+FIXED_NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "resets_at",
+    [
+        FIXED_NOW - timedelta(days=1, seconds=1),
+        FIXED_NOW + timedelta(days=8, seconds=1),
+    ],
+)
+def test_reset_time_just_outside_the_window_is_out_of_range(resets_at):
+    with pytest.raises(BridgeValidationError) as err:
+        parse_usage_report(
+            {"session": {"used_pct": 1, "resets_at": resets_at.isoformat()}}, now=FIXED_NOW
+        )
+    assert (err.value.field, err.value.code) == ("session.resets_at", "out_of_range")
+
+
+@pytest.mark.parametrize("delta", [timedelta(days=-1), timedelta(days=8)])
+def test_reset_time_on_the_window_edge_is_accepted(delta):
+    body = {"session": {"used_pct": 1, "resets_at": (FIXED_NOW + delta).timestamp()}}
+    report = parse_usage_report(body, now=FIXED_NOW)
+    assert report.session.resets_at == utc_timestamp(FIXED_NOW + delta)
 
 
 def test_nan_percent_is_rejected():

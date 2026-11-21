@@ -10,6 +10,7 @@ from starlette.testclient import TestClient
 
 import claude_bridge.server as bridge
 from claude_bridge.participants import presence
+from claude_bridge.timestamps import utc_timestamp
 
 NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -88,15 +89,13 @@ def test_expired_lease_is_no_current_task(client):
 
 
 def test_state_shows_the_latest_usage_report(client):
+    resets_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1)
     client.post(
         "/api/participants/w2/usage",
-        json={"session": {"used_pct": 42, "resets_at": 1767225600}},
+        json={"session": {"used_pct": 42, "resets_at": int(resets_at.timestamp())}},
     )
     usage = state_participants(client)["w2"]["usage"]
-    assert usage["session"] == {
-        "used_pct": 42.0,
-        "resets_at": "2026-01-01T00:00:00.000000Z",
-    }
+    assert usage["session"] == {"used_pct": 42.0, "resets_at": utc_timestamp(resets_at)}
     assert usage["weekly"] is None
     assert usage["reported_at"].endswith("Z")
 

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .migrations import add_missing_columns
-from .timestamps import utc_timestamp
+from .timestamps import as_utc, utc_timestamp
 from .validation import BridgeValidationError
 
 # Usage columns added after the participants table first shipped.
@@ -97,20 +97,26 @@ class UsageReport:
     weekly: UsageWindow | None
 
 
-def parse_usage_report(body: Any) -> UsageReport:
-    """Validate a `{session: {...}, weekly: {...}}` usage body."""
+# Claude Code drops a window once it resets, and a weekly window resets within 7 days.
+RESETS_AT_MAX_PAST = timedelta(days=1)
+RESETS_AT_MAX_FUTURE = timedelta(days=8)
+
+
+def parse_usage_report(body: Any, now: datetime | None = None) -> UsageReport:
+    """Validate a `{session: {...}, weekly: {...}}` usage body; `now` defaults to server time."""
+    now = now or datetime.now(timezone.utc)
     if not isinstance(body, dict):
         raise BridgeValidationError("body", "invalid_type", "must be an object")
     unknown = sorted(set(body) - {"session", "weekly"})
     if unknown:
         raise BridgeValidationError(unknown[0], "unknown_field", "is not a usage window")
     return UsageReport(
-        session=_parse_usage_window(body.get("session"), "session"),
-        weekly=_parse_usage_window(body.get("weekly"), "weekly"),
+        session=_parse_usage_window(body.get("session"), "session", now),
+        weekly=_parse_usage_window(body.get("weekly"), "weekly", now),
     )
 
 
-def _parse_usage_window(value: Any, field: str) -> UsageWindow | None:
+def _parse_usage_window(value: Any, field: str, now: datetime) -> UsageWindow | None:
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -122,7 +128,7 @@ def _parse_usage_window(value: Any, field: str) -> UsageWindow | None:
         )
     return UsageWindow(
         used_pct=_parse_used_pct(value.get("used_pct"), f"{field}.used_pct"),
-        resets_at=_parse_resets_at(value.get("resets_at"), f"{field}.resets_at"),
+        resets_at=_parse_resets_at(value.get("resets_at"), f"{field}.resets_at", now),
     )
 
 
@@ -138,8 +144,8 @@ def _parse_used_pct(value: Any, field: str) -> float:
     return float(value)
 
 
-def _parse_resets_at(value: Any, field: str) -> str | None:
-    """Normalize unix seconds or an ISO-8601 string with an offset."""
+def _parse_resets_at(value: Any, field: str, now: datetime) -> str | None:
+    """Normalize unix seconds or an ISO-8601 string with an offset near `now`."""
     if value is None:
         return None
     if not (_is_number(value) or isinstance(value, str)):
@@ -153,9 +159,20 @@ def _parse_resets_at(value: Any, field: str) -> str | None:
     if instant.tzinfo is None:
         raise BridgeValidationError(field, "invalid", "must include a UTC offset")
     try:
-        return utc_timestamp(instant)
+        utc_instant = as_utc(instant)
     except OverflowError as exc:  # The shift to UTC overflows near datetime.min/max.
         raise _invalid_time(field) from exc
+    _require_plausible_reset(utc_instant, field, now)
+    return utc_timestamp(utc_instant)
+
+
+def _require_plausible_reset(instant: datetime, field: str, now: datetime) -> None:
+    if not now - RESETS_AT_MAX_PAST <= instant <= now + RESETS_AT_MAX_FUTURE:
+        message = (
+            f"must be within {RESETS_AT_MAX_PAST.days} day before and "
+            f"{RESETS_AT_MAX_FUTURE.days} days after server time"
+        )
+        raise BridgeValidationError(field, "out_of_range", message)
 
 
 def _invalid_time(field: str) -> BridgeValidationError:

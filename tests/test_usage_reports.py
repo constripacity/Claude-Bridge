@@ -152,3 +152,9 @@ def test_pre_usage_participants_table_gains_the_usage_columns(tmp_path, monkeypa
     finally:
         bridge._conn.close()
         monkeypatch.setattr(bridge, "_conn", None)
+
+
+def test_a_name_with_a_slash_can_report(client):
+    r = post_usage(client, "team%2Fw1", REPORT)
+    assert r.status_code == 200 and r.json()["name"] == "team/w1"
+    assert stored_usage("team/w1")[0] == 42.0

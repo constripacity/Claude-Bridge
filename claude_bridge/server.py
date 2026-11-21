@@ -3104,7 +3104,7 @@ _routes = [
     Route("/api/session", endpoint=api_session, methods=["GET", "POST", "DELETE"]),
     Route("/api/audit", endpoint=api_audit),
     Route(
-        "/api/participants/{name}/usage",
+        "/api/participants/{name:path}/usage",
         endpoint=api_participant_usage,
         methods=["POST"],
     ),

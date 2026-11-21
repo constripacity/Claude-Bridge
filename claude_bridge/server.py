@@ -22,10 +22,10 @@ import sqlite3
 import asyncio
 import time
 import weakref
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 from urllib.parse import urlsplit
 
 import anyio
@@ -955,6 +955,21 @@ async def _write_transaction(operation: Callable[[], _T]) -> _T:
             if conn.in_transaction:
                 conn.rollback()
             raise
+
+
+@contextmanager
+def _task_errors_as_validation() -> Iterator[None]:
+    """Report task-store failures as the structured errors MCP clients expect."""
+    try:
+        yield
+    except TaskNotFoundError as exc:
+        raise BridgeValidationError(
+            "task_id", "not_found", "does not exist in this channel"
+        ) from exc
+    except TaskLeaseError as exc:
+        raise BridgeValidationError(
+            "lease_token", "lost", "lease no longer held (expired or reclaimed)"
+        ) from exc
 
 
 async def enqueue_task_reliable(
@@ -1985,21 +2000,13 @@ async def dispatch_tool(
         result_payload = None
         if arguments.get("result") is not None:
             result_payload = canonical_json(arguments["result"], field="result")
-        try:
+        with _task_errors_as_validation():
             task = await complete_task_reliable(
                 channel=channel,
                 task_id=arguments["task_id"],
                 lease_token=arguments["lease_token"],
                 result=result_payload,
             )
-        except TaskNotFoundError as exc:
-            raise BridgeValidationError(
-                "task_id", "not_found", "does not exist in this channel"
-            ) from exc
-        except TaskLeaseError as exc:
-            raise BridgeValidationError(
-                "lease_token", "lost", "lease no longer held (expired or reclaimed)"
-            ) from exc
         return _tool_output(
             f"✓ Completed task {task.id} on [{channel}]",
             task_to_dict(task, include_payload=False),
@@ -2009,7 +2016,7 @@ async def dispatch_tool(
     # ── bridge_fail ──────────────────────────────────────────────────────────
     elif name == "bridge_fail":
         channel = validate_channel(arguments["channel"])
-        try:
+        with _task_errors_as_validation():
             task = await fail_task_reliable(
                 channel=channel,
                 task_id=arguments["task_id"],
@@ -2018,14 +2025,6 @@ async def dispatch_tool(
                 error=arguments.get("error"),
                 retry_delay_seconds=arguments.get("retry_delay_seconds", 0),
             )
-        except TaskNotFoundError as exc:
-            raise BridgeValidationError(
-                "task_id", "not_found", "does not exist in this channel"
-            ) from exc
-        except TaskLeaseError as exc:
-            raise BridgeValidationError(
-                "lease_token", "lost", "lease no longer held (expired or reclaimed)"
-            ) from exc
         disposition = "requeued" if task.status is TaskStatus.PENDING else "dead-lettered"
         return _tool_output(
             f"✓ Failed task {task.id} on [{channel}] "

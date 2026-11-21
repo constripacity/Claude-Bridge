@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import http.server
 import importlib.util
 import io
 import json
+import os
+import threading
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -110,18 +114,19 @@ REPORT = {"session": {"used_pct": 1.0, "resets_at": None}}
 
 @pytest.fixture
 def sent(tmp_path, monkeypatch):
-    monkeypatch.setattr(statusline.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(statusline, "stamp_dir", lambda: str(tmp_path / "stamps"))
     requests = []
 
     class _Response:
         def close(self):
             pass
 
-    def fake_urlopen(request, timeout):
-        requests.append((request, timeout))
-        return _Response()
+    class _Opener:
+        def open(self, request, timeout):
+            requests.append((request, timeout))
+            return _Response()
 
-    monkeypatch.setattr(statusline.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(statusline, "OPENER", _Opener())
     return requests
 
 
@@ -154,3 +159,57 @@ def test_main_never_raises_and_prints_a_line(monkeypatch, capsys):
     monkeypatch.setattr(statusline, "report_usage", bridge_down)
     statusline.main()
     assert capsys.readouterr().out.strip() == "-"
+
+
+def test_stamp_dir_is_under_the_user_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(statusline.os.path, "expanduser", lambda _p: str(tmp_path))
+    assert statusline.stamp_dir() == os.path.join(str(tmp_path), ".cache", "claude-bridge")
+
+
+def test_write_stamp_creates_its_dir_and_round_trips(tmp_path):
+    path = str(tmp_path / "new" / "s.stamp")
+    statusline.write_stamp(path, 1234.5)
+    assert statusline.read_stamp(path) == 1234.5
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="POSIX only")
+def test_write_stamp_refuses_a_symlink(tmp_path):
+    target = tmp_path / "victim"
+    target.write_text("keep")
+    link = tmp_path / "s.stamp"
+    link.symlink_to(target)
+    with pytest.raises(OSError):
+        statusline.write_stamp(str(link), 1.0)
+    assert target.read_text() == "keep"
+
+
+@pytest.fixture
+def redirecting_server():
+    hits = []
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            hits.append((self.path, self.headers.get("Authorization")))
+            self.send_response(302)
+            self.send_header("Location", "/elsewhere")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", hits
+    server.shutdown()
+    server.server_close()
+
+
+def test_opener_does_not_follow_a_redirect_with_the_token(redirecting_server):
+    base_url, hits = redirecting_server
+    request = statusline.build_request(base_url, "tok", "w1", REPORT)
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        statusline.OPENER.open(request, timeout=statusline.TIMEOUT_SECONDS)
+    excinfo.value.close()
+    assert excinfo.value.code == 302
+    assert [path for path, _auth in hits] == ["/api/participants/w1/usage"]

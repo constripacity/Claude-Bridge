@@ -16,7 +16,6 @@ import hashlib
 import json
 import os
 import sys
-import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -80,9 +79,24 @@ def build_request(
     )
 
 
-def stamp_path(participant: str) -> str:
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect must not carry the bearer token to another URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+OPENER = urllib.request.build_opener(_RefuseRedirect)
+
+
+def stamp_dir() -> str:
+    # Under the user's home, not the shared temp dir that other users can write.
+    return os.path.join(os.path.expanduser("~"), ".cache", "claude-bridge")
+
+
+def stamp_path(directory: str, participant: str) -> str:
     digest = hashlib.sha256(participant.encode("utf-8")).hexdigest()[:16]
-    return os.path.join(tempfile.gettempdir(), f"claude-bridge-usage-{digest}.stamp")
+    return os.path.join(directory, f"usage-{digest}.stamp")
 
 
 def read_stamp(path: str) -> Optional[float]:
@@ -93,19 +107,27 @@ def read_stamp(path: str) -> Optional[float]:
         return None
 
 
+def write_stamp(path: str, now: float) -> None:
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    # O_NOFOLLOW refuses a planted symlink; Windows has no such flag.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8") as handle:
+        handle.write(str(now))
+
+
 def report_usage(report: Optional[dict], env: dict, now: float) -> None:
     base_url = env.get("CLAUDE_BRIDGE_URL", "")
     participant = env.get("CLAUDE_BRIDGE_PARTICIPANT", "")
     if not (report and base_url and participant):
         return
-    path = stamp_path(participant)
+    path = stamp_path(stamp_dir(), participant)
     if not should_send(read_stamp(path), now):
         return
     # Stamp first: a bridge that is down is then tried once a minute, not always.
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(str(now))
+    # No stamp, no send: else an unwritable home sends on every status refresh.
+    write_stamp(path, now)
     request = build_request(base_url, env.get("CLAUDE_BRIDGE_TOKEN", ""), participant, report)
-    urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS).close()
+    OPENER.open(request, timeout=TIMEOUT_SECONDS).close()
 
 
 def main() -> None:

@@ -11,9 +11,11 @@ import {
   HighlightedJson,
   Icon,
   LiveDot,
+  ParticipantRow,
   SenderPill,
   SENDER_COLORS,
   fmtTs,
+  serverNowMs,
 } from './shared.jsx';
 
 const { useState } = React;
@@ -443,7 +445,7 @@ function Inspector({ detail }) {
     return (
       <div style={{
         width: 360, background: 'var(--bg-base)',
-        display: 'flex', flexDirection: 'column',
+        display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
       }}>
         <ChromeLabel>Inspector</ChromeLabel>
         <div style={{
@@ -459,7 +461,7 @@ function Inspector({ detail }) {
   return (
     <div style={{
       width: 360, background: 'var(--bg-base)',
-      display: 'flex', flexDirection: 'column',
+      display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
     }}>
       <ChromeLabel>Inspector</ChromeLabel>
 
@@ -512,6 +514,28 @@ function Inspector({ detail }) {
               }}>{detail.content}</pre>
           }
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ParticipantsPanel({ state }) {
+  const participants = state?.participants || [];
+  const nowMs = serverNowMs(state);
+  return (
+    <div style={{
+      maxHeight: '45%', display: 'flex', flexDirection: 'column',
+      borderTop: '1px solid var(--hairline)', background: 'var(--bg-base)',
+    }}>
+      <ChromeLabel count={participants.length}>Participants</ChromeLabel>
+      <div style={{ overflowY: 'auto' }}>
+        {participants.map(p => <ParticipantRow key={p.name} p={p} nowMs={nowMs} />)}
+        {participants.length === 0 && (
+          <div style={{
+            padding: '8px 14px 16px', fontFamily: 'var(--mono)', fontSize: 11,
+            color: 'var(--text-faint)',
+          }}>No participants seen yet.</div>
+        )}
       </div>
     </div>
   );
@@ -572,7 +596,10 @@ function DashboardDesktop(props) {
           onClear={props.onClear}
           defaultSender={props.defaultSender}
         />
-        <Inspector detail={props.detail} />
+        <div style={{ width: 360, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <Inspector detail={props.detail} />
+          <ParticipantsPanel state={props.state} />
+        </div>
       </div>
     </div>
   );

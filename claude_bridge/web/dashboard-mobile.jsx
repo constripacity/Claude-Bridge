@@ -8,8 +8,11 @@ import {
   HighlightedJson,
   Icon,
   LiveDot,
+  ParticipantRow,
   SenderPill,
   fmtTs,
+  presenceSummary,
+  serverNowMs,
 } from './shared.jsx';
 
 function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
@@ -224,6 +227,35 @@ function MobileSheet({ detail, channel, defaultSender, onSend }) {
   );
 }
 
+// Collapsed by default: one summary line, so the message feed keeps its room.
+function MobileParticipants({ state }) {
+  const [open, setOpen] = React.useState(false);
+  const participants = state?.participants || [];
+  const nowMs = serverNowMs(state);
+  return (
+    <div style={{ borderBottom: '1px solid var(--hairline)', background: 'var(--bg-base)' }}>
+      <button onClick={() => setOpen(!open)} style={{
+        width: '100%', padding: '8px 16px', background: 'transparent', border: 0,
+        display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+        fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+      }}>
+        <Eyebrow>Participants</Eyebrow>
+        <span style={{ color: 'var(--text-faint)' }}>{presenceSummary(participants)}</span>
+        <span style={{ marginLeft: 'auto', transform: open ? 'rotate(180deg)' : 'none' }}>
+          <Icon name="chev" size={10} color="var(--text-dim)" />
+        </span>
+      </button>
+      {open && (
+        <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+          {participants.map(p => (
+            <ParticipantRow key={p.name} p={p} nowMs={nowMs} compact />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardMobile(props) {
   const channelMeta = props.channelMeta;
   return (
@@ -242,6 +274,7 @@ function DashboardMobile(props) {
         activeId={props.activeChannel}
         onSelect={props.onSelectChannel}
       />
+      <MobileParticipants state={props.state} />
 
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,

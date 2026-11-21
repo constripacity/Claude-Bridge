@@ -623,7 +623,7 @@ class TaskStore:
                 raise TaskNotFoundError(channel, task_id)
             if task.status not in (TaskStatus.PENDING, TaskStatus.CLAIMED):
                 raise TaskNotActiveError(channel, task_id)
-            if len(self.all_notes(task)) >= MAX_NOTES_PER_TASK:
+            if self._note_count(task_id) >= MAX_NOTES_PER_TASK:
                 raise BridgeValidationError(
                     "task_id", "too_many_notes",
                     f"already has {MAX_NOTES_PER_TASK} notes",
@@ -642,6 +642,12 @@ class TaskStore:
                 content=content,
                 created_at=created_at,
             )
+
+    def _note_count(self, task_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM task_notes WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        return int(row[0])
 
     def all_notes(self, task: Task) -> list[TaskNote]:
         """Every note of the task in send order."""

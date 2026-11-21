@@ -175,3 +175,9 @@ async def test_text_output_names_the_task_and_its_channel(fresh_db):
     task = await enqueue_and_claim("w1")
     content, _data = await bridge.dispatch_tool("bridge_participants", {}, structured=True)
     assert f"task {task['task_id']} on [jobs]" in content[0].text
+
+
+@pytest.mark.asyncio
+async def test_tool_listing_declares_bridge_participants_read_only():
+    tools = {tool.name: tool for tool in await bridge.list_tools()}
+    assert tools["bridge_participants"].annotations.readOnlyHint is True

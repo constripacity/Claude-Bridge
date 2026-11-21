@@ -13,6 +13,7 @@ import {
   LiveDot,
   SenderPill,
   SENDER_COLORS,
+  fmtTs,
 } from './shared.jsx';
 
 const { useState } = React;
@@ -292,7 +293,7 @@ function MessageRow({ m, selected, onSelect }) {
       <span title={m.ts} style={{
         fontFamily: 'var(--mono)', fontSize: 11,
         color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums',
-      }}>{m.ts}</span>
+      }}>{fmtTs(m.ts)}</span>
 
       <SenderPill name={m.sender} size="sm" />
 
@@ -454,7 +455,7 @@ function Inspector({ detail }) {
       </div>
     );
   }
-  const ts = detail.ts_full || detail.ts;
+  const ts = fmtTs(detail.ts, true);
   return (
     <div style={{
       width: 360, background: 'var(--bg-base)',

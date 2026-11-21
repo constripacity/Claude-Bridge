@@ -2,6 +2,22 @@
 
 import React from 'react';
 
+// A UTC ISO timestamp as the viewer's local time with a zone label;
+// the raw value on a parse failure rather than "Invalid Date".
+function fmtTs(iso, withDate = false) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const opts = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
+  let zone = '';
+  try {
+    const z = new Intl.DateTimeFormat(undefined, { ...opts, timeZoneName: 'short' })
+      .formatToParts(d).find(p => p.type === 'timeZoneName');
+    zone = z ? ' ' + z.value : '';
+  } catch (e) { /* older engines: no zone label */ }
+  return (withDate ? d.toLocaleDateString() + ' ' : '') + d.toLocaleTimeString(undefined, opts) + zone;
+}
+
 const Icon = ({ name, size = 16, stroke = 1.5, color = 'currentColor' }) => {
   const paths = {
     plus:    <path d="M8 3v10M3 8h10" />,
@@ -163,5 +179,5 @@ const BridgeMark = ({ size = 24, color = 'var(--blue)' }) => (
 
 export {
   Icon, LiveDot, Eyebrow, SenderPill, HighlightedJson, ChromeLabel,
-  BridgeMark, SENDER_COLORS,
+  BridgeMark, SENDER_COLORS, fmtTs,
 };

@@ -9,6 +9,7 @@ import {
   Icon,
   LiveDot,
   SenderPill,
+  fmtTs,
 } from './shared.jsx';
 
 function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
@@ -113,7 +114,7 @@ function MobileMessageRow({ m, selected, onSelect }) {
           marginLeft: 'auto',
           fontFamily: 'var(--mono)', fontSize: 10,
           color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums',
-        }}>{m.ts}</span>
+        }}>{fmtTs(m.ts)}</span>
         {m.is_json && (
           <span style={{
             fontFamily: 'var(--mono)', fontSize: 8.5,

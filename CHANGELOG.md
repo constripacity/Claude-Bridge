@@ -14,6 +14,8 @@ versioning where the Python packaging format allows.
   `bridge_task_notes` (fenced by the `lease_token`), and unread ones in the
   `bridge_complete`/`bridge_fail` output (`unread_notes`). A requeued task gives
   the next worker all notes. A finished task rejects notes (`not_active`).
+  Notes are bounded so a claim stays small: 16 KiB per note, 64 KiB and 100 notes
+  per task.
 - **Ownership history.** Every task view now has `worked_by`, the last consumer
   that claimed the task. Unlike `lease_owner` it is kept after the task ends.
 - **Participants.** `bridge_participants` lists every sender and consumer with

@@ -8,7 +8,7 @@ import pytest
 
 import claude_bridge.server as bridge
 import claude_bridge.taskqueue as taskqueue
-from claude_bridge.validation import DEFAULT_LIMITS, BridgeValidationError
+from claude_bridge.validation import BridgeValidationError
 
 from .legacy_schema import create_v130_database
 
@@ -157,7 +157,7 @@ async def test_channel_clear_drops_only_its_notes(fresh_db):
     [
         ({"content": ""}, "content"),
         ({"content": "   "}, "content"),
-        ({"content": "x" * (DEFAULT_LIMITS.max_message_bytes + 1)}, "content"),
+        ({"content": "x" * (taskqueue.MAX_NOTE_BYTES + 1)}, "content"),
         ({"sender": ""}, "sender"),
     ],
 )
@@ -314,3 +314,47 @@ async def test_tool_listing_declares_the_note_tools():
     assert set(tools["bridge_task_notes"].inputSchema["required"]) == {
         "channel", "task_id", "lease_token",
     }
+
+
+@pytest.mark.asyncio
+async def test_a_note_of_the_byte_limit_is_accepted(fresh_db):
+    task_id = await enqueue()
+    sent = await note(task_id, "x" * taskqueue.MAX_NOTE_BYTES)
+    assert len(sent["content"].encode("utf-8")) == taskqueue.MAX_NOTE_BYTES
+
+
+@pytest.mark.asyncio
+async def test_the_note_byte_limit_counts_utf8_bytes(fresh_db):
+    task_id = await enqueue()
+    two_byte_chars = "é" * (taskqueue.MAX_NOTE_BYTES // 2 + 1)
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await note(task_id, two_byte_chars)
+    assert (excinfo.value.field, excinfo.value.code) == ("content", "too_large")
+
+
+@pytest.mark.asyncio
+async def test_the_notes_of_a_task_have_a_total_byte_limit(fresh_db):
+    task_id = await enqueue()
+    full_note = "é" * (taskqueue.MAX_NOTE_BYTES // 2)
+    assert len(full_note.encode("utf-8")) == taskqueue.MAX_NOTE_BYTES
+    note_count = taskqueue.MAX_NOTE_BYTES_PER_TASK // taskqueue.MAX_NOTE_BYTES
+    for _ in range(note_count):
+        await note(task_id, full_note)
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await note(task_id, "x")
+    assert (excinfo.value.field, excinfo.value.code) == ("content", "task_notes_too_large")
+    task = await claim()
+    assert len(task["notes"]) == note_count
+
+
+@pytest.mark.asyncio
+async def test_small_notes_that_cross_the_total_byte_limit_are_rejected(fresh_db, monkeypatch):
+    monkeypatch.setattr(taskqueue, "MAX_NOTE_BYTES_PER_TASK", 10)
+    task_id = await enqueue()
+    await note(task_id, "1234")
+    await note(task_id, "5678")
+    with pytest.raises(BridgeValidationError) as excinfo:
+        await note(task_id, "abc")
+    assert excinfo.value.code == "task_notes_too_large"
+    await note(task_id, "ab")  # Exactly 10 bytes in total.
+    assert [n["content"] for n in (await claim())["notes"]] == ["1234", "5678", "ab"]

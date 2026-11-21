@@ -317,7 +317,9 @@ bridge_task_note(channel="builds", task_id="tsk_…", sender="orchestrator", con
 the lease, `bridge_task_notes(channel, task_id, lease_token)` returns only the new
 ones, and `bridge_complete`/`bridge_fail` return any still unread in
 `unread_notes`. A requeued task gives the next worker all notes again. A finished
-task rejects notes (`not_active`).
+task rejects notes (`not_active`). Because every claim returns all notes, they are
+bounded: 16 KiB per note (`content`/`too_large`), 64 KiB in total per task
+(`content`/`task_notes_too_large`) and 100 notes per task (`task_id`/`too_many_notes`).
 
 `bridge_participants` lists every sender and consumer with `last_seen` and the
 newest task it holds a live lease on. Names are self-declared, because all

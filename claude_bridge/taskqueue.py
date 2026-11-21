@@ -50,8 +50,10 @@ TASKQUEUE_SCHEMA_VERSION = 1
 # OverflowError from the INSERT or the timedelta arithmetic.
 _MAX_COUNT = 2**31 - 1
 _MAX_TASK_SECONDS = 10**9  # ~31.7 years; larger than any legitimate delay/lease
-# Every claim returns all notes of its task, so their count is bounded.
+# Every claim returns all notes of its task, so count and size are bounded.
 MAX_NOTES_PER_TASK = 100
+MAX_NOTE_BYTES = 16 * 1024
+MAX_NOTE_BYTES_PER_TASK = 64 * 1024
 
 
 class TaskQueueError(RuntimeError):
@@ -611,7 +613,7 @@ class TaskStore:
         channel = validate_channel(channel)
         task_id = validate_reference(task_id, "task_id")
         sender = validate_sender(sender)
-        content = _require_text(content, "content", DEFAULT_LIMITS.max_message_bytes)
+        content = _require_text(content, "content", MAX_NOTE_BYTES)
         if not content.strip():
             raise BridgeValidationError("content", "required", "must not be empty")
         note_id = "note_" + uuid.uuid4().hex
@@ -623,11 +625,7 @@ class TaskStore:
                 raise TaskNotFoundError(channel, task_id)
             if task.status not in (TaskStatus.PENDING, TaskStatus.CLAIMED):
                 raise TaskNotActiveError(channel, task_id)
-            if self._note_count(task_id) >= MAX_NOTES_PER_TASK:
-                raise BridgeValidationError(
-                    "task_id", "too_many_notes",
-                    f"already has {MAX_NOTES_PER_TASK} notes",
-                )
+            self._check_room_for_note(task_id, content)
             cur = self.conn.execute(
                 "INSERT INTO task_notes (id, channel, task_id, sender, content, "
                 "created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -643,11 +641,23 @@ class TaskStore:
                 created_at=created_at,
             )
 
-    def _note_count(self, task_id: str) -> int:
-        row = self.conn.execute(
-            "SELECT COUNT(*) FROM task_notes WHERE task_id = ?", (task_id,)
+    def _check_room_for_note(self, task_id: str, content: str) -> None:
+        count, used_bytes = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(content AS BLOB))), 0) "
+            "FROM task_notes WHERE task_id = ?",
+            (task_id,),
         ).fetchone()
-        return int(row[0])
+        if count >= MAX_NOTES_PER_TASK:
+            raise BridgeValidationError(
+                "task_id", "too_many_notes", f"already has {MAX_NOTES_PER_TASK} notes"
+            )
+        if used_bytes + len(content.encode("utf-8")) > MAX_NOTE_BYTES_PER_TASK:
+            raise BridgeValidationError(
+                "content",
+                "task_notes_too_large",
+                f"would take the notes of the task over {MAX_NOTE_BYTES_PER_TASK} "
+                "UTF-8 bytes",
+            )
 
     def all_notes(self, task: Task) -> list[TaskNote]:
         """Every note of the task in send order."""
@@ -825,6 +835,8 @@ def notes_to_dicts(notes: list[TaskNote]) -> list[dict]:
 
 __all__ = [
     "EnqueueResult",
+    "MAX_NOTE_BYTES",
+    "MAX_NOTE_BYTES_PER_TASK",
     "MAX_NOTES_PER_TASK",
     "SweepResult",
     "TASKQUEUE_SCHEMA_VERSION",

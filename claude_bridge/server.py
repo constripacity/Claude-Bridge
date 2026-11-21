@@ -78,6 +78,8 @@ from .participants import (
     participant_to_dict,
 )
 from .taskqueue import (
+    MAX_NOTE_BYTES,
+    MAX_NOTE_BYTES_PER_TASK,
     MAX_NOTES_PER_TASK,
     TaskLeaseError,
     TaskNote,
@@ -1695,8 +1697,9 @@ async def list_tools() -> list[Tool]:
                 "Attach a note to a pending or claimed task, e.g. a correction for "
                 "the worker. The worker gets every note at bridge_claim, new ones "
                 "via bridge_task_notes, and unread ones in bridge_complete and "
-                "bridge_fail output. A finished task rejects notes; a task holds "
-                f"at most {MAX_NOTES_PER_TASK} notes."
+                "bridge_fail output. A finished task rejects notes. Limits: "
+                f"{MAX_NOTE_BYTES // 1024} KiB per note, {MAX_NOTE_BYTES_PER_TASK // 1024} "
+                f"KiB and {MAX_NOTES_PER_TASK} notes per task."
             ),
             inputSchema={
                 "type": "object",

@@ -215,7 +215,10 @@ before making support claims.
 | `bridge_claim` | Atomically claim the next task with a lease; long-poll with `wait_seconds` |
 | `bridge_complete` | Mark a claimed task done, fenced by its `lease_token` |
 | `bridge_fail` | Fail a claimed task — requeue with backoff, or dead-letter |
-| `bridge_tasks` | Inspect a channel's queue: per-status counts and a task list |
+| `bridge_tasks` | Inspect a channel's queue: per-status counts and a task list (with `worked_by`) |
+| `bridge_task_note` | Attach a note to a pending or claimed task for its worker |
+| `bridge_task_notes` | Read a claimed task's new notes, fenced by its `lease_token` |
+| `bridge_participants` | List participants: last seen and the task each one holds |
 
 Tool results include structured data for clients that support MCP structured
 content and a readable text representation for compatibility.
@@ -303,6 +306,25 @@ If a worker crashes and never resolves its task, the lease expires and the task
 is requeued automatically — or dead-lettered once `max_attempts` is exhausted.
 This is **at-least-once** delivery, so make task handlers idempotent.
 `bridge_tasks(channel="builds")` shows the queue's per-status counts.
+
+An orchestrator can correct a task after it was enqueued, without a new task:
+
+```text
+bridge_task_note(channel="builds", task_id="tsk_…", sender="orchestrator", content="use branch b")
+```
+
+`bridge_claim` returns every note so far in `task.notes`. While the worker holds
+the lease, `bridge_task_notes(channel, task_id, lease_token)` returns only the new
+ones, and `bridge_complete`/`bridge_fail` return any still unread in
+`unread_notes`. A requeued task gives the next worker all notes again. A finished
+task rejects notes (`not_active`). Because every claim returns all notes, they are
+bounded: 16 KiB per note (`content`/`too_large`), 64 KiB in total per task
+(`content`/`task_notes_too_large`) and 100 notes per task (`task_id`/`too_many_notes`).
+
+`bridge_participants` lists senders and consumers, newest first (`limit`, default
+100, max 500), with `last_seen` and the newest task each holds a live lease on.
+Names are self-declared, because all
+clients share one bearer token: treat the list as a presence hint, not identity.
 
 ## Channels
 
@@ -404,6 +426,7 @@ session, and a server restart invalidates all in-memory dashboard sessions.
 | `CLAUDE_BRIDGE_SESSION_TTL_SECONDS` | `28800` | Opaque dashboard-session lifetime |
 | `CLAUDE_BRIDGE_EVENT_POLL_MS` | `500` | Cross-process outbox polling interval |
 | `CLAUDE_BRIDGE_EVENT_RETENTION_DAYS` | `7` | Retain delivered outbox records |
+| `CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS` | `7` | Forget participants that hold no task after this many idle days; `0` keeps them |
 | `--no-dashboard` | off | Do not mount browser assets |
 | `CLAUDE_BRIDGE_MAX_REQUEST_BYTES` | `262144` | Maximum HTTP request body |
 | `CLAUDE_BRIDGE_MAX_MESSAGE_BYTES` | `131072` | Maximum encoded message |

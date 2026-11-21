@@ -4,6 +4,35 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
+## [Unreleased]
+
+### Added
+
+- **Task notes.** `bridge_task_note` attaches a note to a pending or claimed
+  task, so an orchestrator can correct a task without a new one. The worker
+  gets every note at `bridge_claim` (`task.notes`), new ones with
+  `bridge_task_notes` (fenced by the `lease_token`), and unread ones in the
+  `bridge_complete`/`bridge_fail` output (`unread_notes`). A requeued task gives
+  the next worker all notes. A finished task rejects notes (`not_active`).
+  Notes are bounded so a claim stays small: 16 KiB per note, 64 KiB and 100 notes
+  per task.
+- **Ownership history.** Every task view now has `worked_by`, the last consumer
+  that claimed the task. Unlike `lease_owner` it is kept after the task ends.
+- **Participants.** `bridge_participants` lists every sender and consumer with
+  `last_seen` and the newest task it holds a live lease on. Names are
+  self-declared (one shared bearer token), so this is a presence hint, not an
+  identity. It returns the newest 100 by default (`limit`, max 500). Participants
+  that hold no task are pruned after `CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS` (default
+  7, `0` keeps them), independent of message retention.
+- Schema: new `task_notes` and `participants` tables and the `tasks` columns
+  `worked_by` and `notes_read_seq`. An older database upgrades in place at
+  startup; the task-queue schema version stays 1, so a 1.3.0 server can still
+  open the upgraded database.
+- Rollback note: a 1.3.0 server ignores notes. Tasks it prunes leave their notes
+  behind (the sweep deletes them after an upgrade again), and a task it claims
+  keeps the note cursor of the lease before, so `bridge_task_notes` can skip notes
+  up to that cursor until the next claim, which delivers all notes again.
+
 ## [1.3.0] - 2026-08-23
 
 Task queue: the first step from a message bus toward an agent orchestration

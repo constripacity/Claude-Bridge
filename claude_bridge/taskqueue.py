@@ -25,7 +25,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Iterator
@@ -38,6 +38,7 @@ from .validation import (
     validate_consumer,
     validate_non_negative_int,
     validate_reference,
+    validate_sender,
 )
 
 TASKQUEUE_SCHEMA_VERSION = 1
@@ -49,6 +50,10 @@ TASKQUEUE_SCHEMA_VERSION = 1
 # OverflowError from the INSERT or the timedelta arithmetic.
 _MAX_COUNT = 2**31 - 1
 _MAX_TASK_SECONDS = 10**9  # ~31.7 years; larger than any legitimate delay/lease
+# Every claim returns all notes of its task, so count and size are bounded.
+MAX_NOTES_PER_TASK = 100
+MAX_NOTE_BYTES = 16 * 1024
+MAX_NOTE_BYTES_PER_TASK = 64 * 1024
 
 
 class TaskQueueError(RuntimeError):
@@ -69,6 +74,15 @@ class TaskLeaseError(TaskQueueError):
         self.channel = channel
         self.task_id = task_id
         super().__init__(f"lease on task {task_id!r} is no longer held")
+
+
+class TaskNotActiveError(TaskQueueError):
+    """A note was sent to a task that is already completed, failed or dead."""
+
+    def __init__(self, channel: str, task_id: str) -> None:
+        self.channel = channel
+        self.task_id = task_id
+        super().__init__(f"task {task_id!r} is no longer pending or claimed")
 
 
 class TaskStatus(str, Enum):
@@ -104,6 +118,22 @@ def _require_text(value: object, field: str, max_bytes: int) -> str:
     if "\x00" in value:
         raise BridgeValidationError(field, "nul_byte", "must not contain NUL bytes")
     return value
+
+
+# Columns added after v1.3.0; an older DB gets them in place on startup.
+_TASK_ADDED_COLUMNS = {
+    "worked_by": "TEXT",
+    "notes_read_seq": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
+def _add_missing_columns(
+    conn: sqlite3.Connection, table: str, columns: dict[str, str]
+) -> None:
+    present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, ddl in columns.items():
+        if name not in present:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
 @contextmanager
@@ -163,6 +193,8 @@ def ensure_taskqueue_schema(conn: sqlite3.Connection) -> None:
                 last_error       TEXT,
                 idempotency_key  TEXT,
                 enqueued_by      TEXT,
+                worked_by        TEXT,
+                notes_read_seq   INTEGER NOT NULL DEFAULT 0,
                 created_at       TEXT    NOT NULL,
                 updated_at       TEXT    NOT NULL,
                 CHECK (
@@ -179,6 +211,7 @@ def ensure_taskqueue_schema(conn: sqlite3.Connection) -> None:
             )
             """
         )
+        _add_missing_columns(conn, "tasks", _TASK_ADDED_COLUMNS)
         # Claim scan: oldest eligible pending task on a channel, priority first.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_ready "
@@ -193,6 +226,22 @@ def ensure_taskqueue_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency "
             "ON tasks(channel, idempotency_key) WHERE idempotency_key IS NOT NULL"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_notes (
+                seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                id         TEXT    NOT NULL UNIQUE,
+                channel    TEXT    NOT NULL,
+                task_id    TEXT    NOT NULL,
+                sender     TEXT    NOT NULL,
+                content    TEXT    NOT NULL,
+                created_at TEXT    NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(task_id, seq)"
         )
         # Inspection / counts.
         conn.execute(
@@ -227,8 +276,29 @@ class Task:
     last_error: str | None
     idempotency_key: str | None
     enqueued_by: str | None
+    worked_by: str | None  # Last consumer that claimed the task; never cleared.
+    notes_read_seq: int  # Highest note seq delivered to the current lease.
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaskNote:
+    seq: int
+    id: str
+    channel: str
+    task_id: str
+    sender: str
+    content: str
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaskWithNotes:
+    """A task write result plus the notes its worker must see now."""
+
+    task: Task
+    notes: list[TaskNote]
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,34 +313,32 @@ class SweepResult:
     dead_lettered: int
 
 
-_TASK_COLUMNS = (
-    "seq, id, channel, payload, status, priority, attempts, max_attempts, "
-    "available_at, lease_owner, lease_token, lease_expires_at, result, "
-    "last_error, idempotency_key, enqueued_by, created_at, updated_at"
-)
+# One column order for SELECT and row mapping: the field order of Task.
+_TASK_FIELDS = tuple(field.name for field in fields(Task))
+_TASK_COLUMNS = ", ".join(_TASK_FIELDS)
 _TASK_SELECT = f"SELECT {_TASK_COLUMNS} FROM tasks "
 
 
 def _task_from_row(row: sqlite3.Row | tuple) -> Task:
-    return Task(
+    values = dict(zip(_TASK_FIELDS, tuple(row), strict=True))
+    values["status"] = TaskStatus(values["status"])
+    return Task(**values)
+
+
+_NOTE_SELECT = (
+    "SELECT seq, id, channel, task_id, sender, content, created_at FROM task_notes "
+)
+
+
+def _note_from_row(row: sqlite3.Row | tuple) -> TaskNote:
+    return TaskNote(
         seq=int(row[0]),
         id=row[1],
         channel=row[2],
-        payload=row[3],
-        status=TaskStatus(row[4]),
-        priority=int(row[5]),
-        attempts=int(row[6]),
-        max_attempts=int(row[7]),
-        available_at=row[8],
-        lease_owner=row[9],
-        lease_token=row[10],
-        lease_expires_at=row[11],
-        result=row[12],
-        last_error=row[13],
-        idempotency_key=row[14],
-        enqueued_by=row[15],
-        created_at=row[16],
-        updated_at=row[17],
+        task_id=row[3],
+        sender=row[4],
+        content=row[5],
+        created_at=row[6],
     )
 
 
@@ -417,10 +485,12 @@ class TaskStore:
                 return None
             seq = int(row[0])
             self.conn.execute(
-                "UPDATE tasks SET status = 'claimed', lease_owner = ?, "
+                "UPDATE tasks SET status = 'claimed', lease_owner = ?, worked_by = ?, "
                 "lease_token = ?, lease_expires_at = ?, attempts = attempts + 1, "
+                "notes_read_seq = (SELECT COALESCE(MAX(seq), 0) FROM task_notes "
+                "WHERE task_notes.task_id = tasks.id), "
                 "updated_at = ? WHERE seq = ? AND status = 'pending'",
-                (consumer, lease_token, lease_expires_at, now_iso, seq),
+                (consumer, consumer, lease_token, lease_expires_at, now_iso, seq),
             )
             claimed = self.conn.execute(
                 _TASK_SELECT + "WHERE seq = ?", (seq,)
@@ -508,6 +578,106 @@ class TaskStore:
             ).fetchone()
             return _task_from_row(updated)
 
+    def add_note(
+        self,
+        *,
+        channel: str,
+        task_id: str,
+        sender: str,
+        content: str,
+        now: datetime | None = None,
+    ) -> TaskNote:
+        """Attach a note to a pending or claimed task for its (next) worker."""
+        channel = validate_channel(channel)
+        task_id = validate_reference(task_id, "task_id")
+        sender = validate_sender(sender)
+        content = _require_text(content, "content", MAX_NOTE_BYTES)
+        if not content.strip():
+            raise BridgeValidationError("content", "required", "must not be empty")
+        note_id = "note_" + uuid.uuid4().hex
+        created_at = _timestamp(_as_utc(now or _utc_now()))
+
+        with self._lock, _savepoint(self.conn):
+            task = self._get(channel, task_id)
+            if task is None:
+                raise TaskNotFoundError(channel, task_id)
+            if task.status not in (TaskStatus.PENDING, TaskStatus.CLAIMED):
+                raise TaskNotActiveError(channel, task_id)
+            self._check_room_for_note(task_id, content)
+            cur = self.conn.execute(
+                "INSERT INTO task_notes (id, channel, task_id, sender, content, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (note_id, channel, task_id, sender, content, created_at),
+            )
+            return TaskNote(
+                seq=int(cur.lastrowid),
+                id=note_id,
+                channel=channel,
+                task_id=task_id,
+                sender=sender,
+                content=content,
+                created_at=created_at,
+            )
+
+    def _check_room_for_note(self, task_id: str, content: str) -> None:
+        count, used_bytes = self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(content AS BLOB))), 0) "
+            "FROM task_notes WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        if count >= MAX_NOTES_PER_TASK:
+            raise BridgeValidationError(
+                "task_id", "too_many_notes", f"already has {MAX_NOTES_PER_TASK} notes"
+            )
+        if used_bytes + len(content.encode("utf-8")) > MAX_NOTE_BYTES_PER_TASK:
+            raise BridgeValidationError(
+                "content",
+                "task_notes_too_large",
+                f"would take the notes of the task over {MAX_NOTE_BYTES_PER_TASK} "
+                "UTF-8 bytes",
+            )
+
+    def all_notes(self, task: Task) -> list[TaskNote]:
+        """Every note of the task in send order."""
+        return self._notes_after(task.id, 0)
+
+    def unread_notes(self, task: Task) -> list[TaskNote]:
+        """Notes the current (or last) lease has not seen yet."""
+        return self._notes_after(task.id, task.notes_read_seq)
+
+    def _notes_after(self, task_id: str, seq: int) -> list[TaskNote]:
+        with self._lock:
+            rows = self.conn.execute(
+                _NOTE_SELECT + "WHERE task_id = ? AND seq > ? ORDER BY seq",
+                (task_id, seq),
+            ).fetchall()
+        return [_note_from_row(r) for r in rows]
+
+    def take_new_notes(
+        self, *, channel: str, task_id: str, lease_token: str
+    ) -> list[TaskNote]:
+        """Return notes sent since the lease last read them, and advance its cursor."""
+        channel = validate_channel(channel)
+        task_id = validate_reference(task_id, "task_id")
+        lease_token = validate_reference(lease_token, "lease_token")
+
+        with self._lock, _savepoint(self.conn):
+            row = self.conn.execute(
+                _TASK_SELECT + "WHERE id = ? AND channel = ? AND status = 'claimed' "
+                "AND lease_token = ?",
+                (task_id, channel, lease_token),
+            ).fetchone()
+            if row is None:
+                self._raise_fence_error(channel, task_id)
+            task = _task_from_row(row)
+            new_notes = self.unread_notes(task)
+            if new_notes:
+                self.conn.execute(
+                    "UPDATE tasks SET notes_read_seq = ? WHERE seq = ?",
+                    (new_notes[-1].seq, task.seq),
+                )
+            return new_notes
+
     def _raise_fence_error(self, channel: str, task_id: str) -> None:
         """Distinguish an unknown task from a lost lease for a helpful error."""
         if self._get(channel, task_id) is None:
@@ -576,18 +746,34 @@ class TaskStore:
     def prune_terminal(self, *, older_than_iso: str, limit: int = 1000) -> int:
         """Delete finished tasks (completed/failed/dead) older than a cutoff."""
         limit = normalize_limit(limit, default=1000, maximum=10_000)
+        doomed = (
+            "SELECT rowid FROM tasks WHERE status IN ('completed','failed','dead') "
+            "AND updated_at < ? ORDER BY updated_at, seq LIMIT ?"
+        )
         with self._lock, _savepoint(self.conn):
+            self.conn.execute(
+                "DELETE FROM task_notes WHERE task_id IN "
+                f"(SELECT id FROM tasks WHERE rowid IN ({doomed}))",
+                (older_than_iso, limit),
+            )
             return self.conn.execute(
-                "DELETE FROM tasks WHERE rowid IN (SELECT rowid FROM tasks "
-                "WHERE status IN ('completed','failed','dead') AND updated_at < ? "
-                "ORDER BY updated_at LIMIT ?)",
+                f"DELETE FROM tasks WHERE rowid IN ({doomed})",
                 (older_than_iso, limit),
             ).rowcount
 
+    def delete_orphan_notes(self) -> int:
+        """Delete notes whose task is gone, e.g. pruned by a server without notes."""
+        with self._lock, _savepoint(self.conn):
+            return self.conn.execute(
+                "DELETE FROM task_notes WHERE NOT EXISTS "
+                "(SELECT 1 FROM tasks WHERE tasks.id = task_notes.task_id)"
+            ).rowcount
+
     def delete_channel(self, *, channel: str) -> int:
-        """Remove every task on a channel (used by bridge_clear)."""
+        """Remove every task and task note on a channel (used by bridge_clear)."""
         channel = validate_channel(channel)
         with self._lock, _savepoint(self.conn):
+            self.conn.execute("DELETE FROM task_notes WHERE channel = ?", (channel,))
             return self.conn.execute(
                 "DELETE FROM tasks WHERE channel = ?", (channel,)
             ).rowcount
@@ -609,6 +795,7 @@ def task_to_dict(task: Task, *, include_payload: bool = True) -> dict:
         "last_error": task.last_error,
         "idempotency_key": task.idempotency_key,
         "enqueued_by": task.enqueued_by,
+        "worked_by": task.worked_by,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
     }
@@ -617,16 +804,39 @@ def task_to_dict(task: Task, *, include_payload: bool = True) -> dict:
     return data
 
 
+def note_to_dict(note: TaskNote) -> dict:
+    return {
+        "seq": note.seq,
+        "id": note.id,
+        "task_id": note.task_id,
+        "sender": note.sender,
+        "content": note.content,
+        "created_at": note.created_at,
+    }
+
+
+def notes_to_dicts(notes: list[TaskNote]) -> list[dict]:
+    return [note_to_dict(n) for n in notes]
+
+
 __all__ = [
     "EnqueueResult",
+    "MAX_NOTE_BYTES",
+    "MAX_NOTE_BYTES_PER_TASK",
+    "MAX_NOTES_PER_TASK",
     "SweepResult",
     "TASKQUEUE_SCHEMA_VERSION",
     "Task",
     "TaskLeaseError",
+    "TaskNote",
+    "TaskNotActiveError",
     "TaskNotFoundError",
     "TaskQueueError",
     "TaskStatus",
     "TaskStore",
+    "TaskWithNotes",
     "ensure_taskqueue_schema",
+    "note_to_dict",
+    "notes_to_dicts",
     "task_to_dict",
 ]

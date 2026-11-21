@@ -81,6 +81,7 @@ class Settings:
     default_lease_seconds: int
     max_lease_seconds: int
     default_max_attempts: int
+    participant_idle_days: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -143,5 +144,8 @@ class Settings:
             ),
             default_max_attempts=env_int(
                 "CLAUDE_BRIDGE_DEFAULT_MAX_ATTEMPTS", 3, minimum=1
+            ),
+            participant_idle_days=env_int(
+                "CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS", 7, minimum=0
             ),
         )

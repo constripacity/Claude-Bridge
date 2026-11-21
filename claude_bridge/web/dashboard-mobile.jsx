@@ -15,7 +15,7 @@ import {
   serverNowMs,
 } from './shared.jsx';
 
-function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
+function MobileHeader({ state, channels, activeId, onSelect, onNewChannel, authControl }) {
   return (
     <div style={{
       background: 'var(--bg-deep)',
@@ -27,7 +27,7 @@ function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
         display: 'flex', alignItems: 'center', gap: 10,
       }}>
         <BridgeMark size={20} color="var(--blue)" />
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
             letterSpacing: '0.22em', color: 'var(--text)',
@@ -40,6 +40,7 @@ function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
             <span>online · :8765 · {state?.uptime_human || '00:00:00'}</span>
           </div>
         </div>
+        {authControl}
       </div>
 
       <div style={{
@@ -273,6 +274,7 @@ function DashboardMobile(props) {
         onNewChannel={props.onNewChannel}
         activeId={props.activeChannel}
         onSelect={props.onSelectChannel}
+        authControl={props.authControl}
       />
       <MobileParticipants state={props.state} />
 

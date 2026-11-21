@@ -212,6 +212,48 @@ function storeActiveChannel(channel) {
   } catch (_) {}
 }
 
+// Rendered inside the dashboard header so it never covers the header icons.
+function AuthControl({ authState, onSignIn, onSignOut }) {
+  if (authState.active) {
+    return (
+      <div style={{
+        background: 'rgba(63, 185, 80, 0.12)',
+        border: '1px solid rgba(63, 185, 80, 0.4)',
+        borderRadius: 6, padding: '4px 10px',
+        fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)',
+        display: 'flex', alignItems: 'center', gap: 8,
+        flexShrink: 0, whiteSpace: 'nowrap',
+      }}>
+        <span>Session ✓</span>
+        <button
+          onClick={onSignOut}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(63, 185, 80, 0.4)',
+            borderRadius: 4, padding: '1px 6px', color: 'var(--green)',
+            fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer',
+          }}
+          title="End dashboard session"
+        >logout</button>
+      </div>
+    );
+  }
+  if (!authState.required) return null;
+  return (
+    <button
+      onClick={onSignIn}
+      style={{
+        background: 'rgba(88, 166, 255, 0.14)',
+        border: '1px solid rgba(88, 166, 255, 0.5)',
+        borderRadius: 6, padding: '5px 10px',
+        fontFamily: 'var(--mono)', fontSize: 11,
+        color: 'var(--blue)', cursor: 'pointer',
+        flexShrink: 0, whiteSpace: 'nowrap',
+      }}
+    >Sign in</button>
+  );
+}
+
 function App() {
   const [state, setState] = useState(null);
   const [activeChannel, setActiveChannel] = useState(readActiveChannel);
@@ -466,6 +508,13 @@ function App() {
         onClear={handleClear}
         onNewChannel={handleNewChannel}
         defaultSender={sender}
+        authControl={(
+          <AuthControl
+            authState={authState}
+            onSignIn={handleSignIn}
+            onSignOut={handleSignOut}
+          />
+        )}
       />
 
       {error && (
@@ -478,43 +527,6 @@ function App() {
           zIndex: 100,
         }}>
           {error}
-        </div>
-      )}
-
-      {authState.required && !authState.active && (
-        <button
-          onClick={handleSignIn}
-          style={{
-            position: 'fixed', top: 12, right: 12,
-            background: 'rgba(88, 166, 255, 0.14)',
-            border: '1px solid rgba(88, 166, 255, 0.5)',
-            borderRadius: 6, padding: '5px 10px',
-            fontFamily: 'var(--mono)', fontSize: 11,
-            color: 'var(--blue)', cursor: 'pointer', zIndex: 100,
-          }}
-        >Sign in</button>
-      )}
-
-      {authState.active && (
-        <div style={{
-          position: 'fixed', top: 12, right: 12,
-          background: 'rgba(63, 185, 80, 0.12)',
-          border: '1px solid rgba(63, 185, 80, 0.4)',
-          borderRadius: 6, padding: '4px 10px',
-          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)',
-          display: 'flex', alignItems: 'center', gap: 8, zIndex: 100,
-        }}>
-          <span>Session ✓</span>
-          <button
-            onClick={handleSignOut}
-            style={{
-              background: 'transparent',
-              border: '1px solid rgba(63, 185, 80, 0.4)',
-              borderRadius: 4, padding: '1px 6px', color: 'var(--green)',
-              fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer',
-            }}
-            title="End dashboard session"
-          >logout</button>
         </div>
       )}
     </div>

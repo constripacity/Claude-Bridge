@@ -20,7 +20,7 @@ import {
 
 const { useState } = React;
 
-function HeaderBar({ state }) {
+function HeaderBar({ state, authControl }) {
   const totals = {
     channels: state?.channels?.length ?? 0,
     messages: state?.total_messages ?? 0,
@@ -68,6 +68,7 @@ function HeaderBar({ state }) {
         <HeaderBtn><Icon name="search" size={14} color="var(--text-mid)" /></HeaderBtn>
         <HeaderBtn><Icon name="book"   size={14} color="var(--text-mid)" /></HeaderBtn>
         <HeaderBtn><Icon name="gear"   size={14} color="var(--text-mid)" /></HeaderBtn>
+        {authControl}
       </div>
     </div>
   );
@@ -578,7 +579,7 @@ function DashboardDesktop(props) {
       display: 'flex', flexDirection: 'column',
       overflow: 'hidden',
     }}>
-      <HeaderBar state={props.state} />
+      <HeaderBar state={props.state} authControl={props.authControl} />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Sidebar
           channels={props.state?.channels}

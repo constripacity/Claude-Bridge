@@ -25,7 +25,7 @@ import weakref
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable, TypeVar
 from urllib.parse import urlsplit
 
 import anyio
@@ -926,6 +926,24 @@ def _clamp_lease_seconds(value: int | None) -> int:
     return min(lease, MAX_LEASE_SECONDS)
 
 
+_T = TypeVar("_T")
+
+
+async def _write_transaction(operation: Callable[[], _T]) -> _T:
+    """Run a store operation as one committed write under the single-writer lock."""
+    conn = db()
+    async with _write_lock:
+        await _begin_immediate(conn)
+        try:
+            result = operation()
+            conn.commit()
+            return result
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+
 async def enqueue_task_reliable(
     *,
     channel: str,
@@ -936,45 +954,30 @@ async def enqueue_task_reliable(
     idempotency_key: str | None = None,
     enqueued_by: str | None = None,
 ):
-    conn = db()
-    async with _write_lock:
-        await _begin_immediate(conn)
-        try:
-            result = task_store().enqueue(
-                channel=channel,
-                payload=payload,
-                priority=priority,
-                max_attempts=(
-                    DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
-                ),
-                delay_seconds=delay_seconds,
-                idempotency_key=idempotency_key,
-                enqueued_by=enqueued_by,
-            )
-            conn.commit()
-        except BaseException:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+    result = await _write_transaction(
+        lambda: task_store().enqueue(
+            channel=channel,
+            payload=payload,
+            priority=priority,
+            max_attempts=(
+                DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
+            ),
+            delay_seconds=delay_seconds,
+            idempotency_key=idempotency_key,
+            enqueued_by=enqueued_by,
+        )
+    )
     if result.created:
         await _notify_task_waiters()
     return result
 
 
 async def _claim_task_once(*, channel: str, consumer: str, lease_seconds: int):
-    conn = db()
-    async with _write_lock:
-        await _begin_immediate(conn)
-        try:
-            task = task_store().claim(
-                channel=channel, consumer=consumer, lease_seconds=lease_seconds
-            )
-            conn.commit()
-            return task
-        except BaseException:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+    return await _write_transaction(
+        lambda: task_store().claim(
+            channel=channel, consumer=consumer, lease_seconds=lease_seconds
+        )
+    )
 
 
 async def claim_task_waiting(
@@ -1014,22 +1017,14 @@ async def claim_task_waiting(
 async def complete_task_reliable(
     *, channel: str, task_id: str, lease_token: str, result: str | None = None
 ):
-    conn = db()
-    async with _write_lock:
-        await _begin_immediate(conn)
-        try:
-            task = task_store().complete(
-                channel=channel,
-                task_id=task_id,
-                lease_token=lease_token,
-                result=result,
-            )
-            conn.commit()
-            return task
-        except BaseException:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+    return await _write_transaction(
+        lambda: task_store().complete(
+            channel=channel,
+            task_id=task_id,
+            lease_token=lease_token,
+            result=result,
+        )
+    )
 
 
 async def fail_task_reliable(
@@ -1041,23 +1036,16 @@ async def fail_task_reliable(
     error: str | None = None,
     retry_delay_seconds: int = 0,
 ):
-    conn = db()
-    async with _write_lock:
-        await _begin_immediate(conn)
-        try:
-            task = task_store().fail(
-                channel=channel,
-                task_id=task_id,
-                lease_token=lease_token,
-                requeue=requeue,
-                error=error,
-                retry_delay_seconds=retry_delay_seconds,
-            )
-            conn.commit()
-        except BaseException:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+    task = await _write_transaction(
+        lambda: task_store().fail(
+            channel=channel,
+            task_id=task_id,
+            lease_token=lease_token,
+            requeue=requeue,
+            error=error,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+    )
     # A requeued task is claimable again; wake any waiting workers.
     if task.status is TaskStatus.PENDING:
         await _notify_task_waiters()

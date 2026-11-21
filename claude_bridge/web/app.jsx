@@ -494,37 +494,42 @@ function App() {
   const Dashboard = width <= MOBILE_MAX ? DashboardMobile : DashboardDesktop;
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: 'var(--bg-base)' }}>
-      <Dashboard
-        state={state}
-        activeChannel={activeChannel}
-        channelMeta={channelMeta}
-        messages={messages}
-        selectedId={selectedMsg?.id}
-        detail={detail}
-        onSelectChannel={handleSelectChannel}
-        onSelectMessage={handleSelectMessage}
-        onSend={handleSend}
-        onClear={handleClear}
-        onNewChannel={handleNewChannel}
-        defaultSender={sender}
-        authControl={(
-          <AuthControl
-            authState={authState}
-            onSignIn={handleSignIn}
-            onSignOut={handleSignOut}
-          />
-        )}
-      />
+    <div style={{
+      width: '100vw', height: '100vh', background: 'var(--bg-base)',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <Dashboard
+          state={state}
+          activeChannel={activeChannel}
+          channelMeta={channelMeta}
+          messages={messages}
+          selectedId={selectedMsg?.id}
+          detail={detail}
+          onSelectChannel={handleSelectChannel}
+          onSelectMessage={handleSelectMessage}
+          onSend={handleSend}
+          onClear={handleClear}
+          onNewChannel={handleNewChannel}
+          defaultSender={sender}
+          authControl={(
+            <AuthControl
+              authState={authState}
+              onSignIn={handleSignIn}
+              onSignOut={handleSignOut}
+            />
+          )}
+        />
+      </div>
 
+      {/* In the layout flow, so the error bar never covers the composer. */}
       {error && (
         <div style={{
-          position: 'fixed', bottom: 12, right: 12, maxWidth: 360,
+          flexShrink: 0,
           background: 'rgba(248, 81, 73, 0.12)',
-          border: '1px solid rgba(248, 81, 73, 0.4)',
-          borderRadius: 6, padding: '8px 12px',
+          borderTop: '1px solid rgba(248, 81, 73, 0.4)',
+          padding: '8px 16px',
           fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)',
-          zIndex: 100,
         }}>
           {error}
         </div>

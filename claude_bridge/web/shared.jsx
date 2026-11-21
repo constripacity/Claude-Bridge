@@ -322,11 +322,18 @@ function presenceSummary(participants) {
     .filter(k => counts[k]).map(k => `${counts[k]} ${k}`).join(' · ') || 'none';
 }
 
-// The server clock, so ages and presence agree with the server.
-const serverNowMs = (state) => Date.parse(state?.server_time) || Date.now();
+// Marks when a state arrived, so serverNowMs can advance between polls.
+const withReceiptTime = (state) => ({ ...state, receivedAtMs: performance.now() });
+
+// The server clock plus the client time since the fetch, so ages agree with the server.
+function serverNowMs(state) {
+  const serverMs = Date.parse(state?.server_time);
+  if (!serverMs) return Date.now();
+  return serverMs + (performance.now() - (state.receivedAtMs ?? performance.now()));
+}
 
 export {
   Icon, LiveDot, Eyebrow, SenderPill, HighlightedJson, ChromeLabel,
   BridgeMark, SENDER_COLORS, fmtTs,
-  ParticipantRow, presenceSummary, serverNowMs,
+  ParticipantRow, presenceSummary, serverNowMs, withReceiptTime,
 };

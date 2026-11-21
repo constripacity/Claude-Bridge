@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import DashboardDesktop from './dashboard-desktop.jsx';
 import DashboardMobile from './dashboard-mobile.jsx';
+import { withReceiptTime } from './shared.jsx';
 
 const POLL_MS = 2000;
 const MOBILE_MAX = 640;
@@ -240,7 +241,7 @@ function App() {
   const refreshState = useCallback(async () => {
     try {
       const nextState = await fetchJson('/api/state');
-      setState(nextState);
+      setState(withReceiptTime(nextState));
       setError(null);
     } catch (caught) {
       setError(String(caught));

@@ -426,7 +426,11 @@ async def _begin_immediate(conn: sqlite3.Connection, attempts: int = 7) -> None:
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return iso_z(datetime.now(timezone.utc))
+
+
+def iso_z(instant: datetime) -> str:
+    return instant.isoformat().replace("+00:00", "Z")
 
 
 def uptime_seconds() -> int:
@@ -1224,7 +1228,7 @@ def _retention_cutoff_iso(days: int, now: datetime | None = None) -> str:
     """The ISO timestamp `days` before `now`. Same `...Z` UTC shape as stored
     timestamps so a plain string comparison in SQL is a correct time compare."""
     base = now or datetime.now(timezone.utc)
-    return (base - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+    return iso_z(base - timedelta(days=days))
 
 
 async def delete_messages_before(cutoff_iso: str) -> int:
@@ -2434,6 +2438,8 @@ async def api_state(request: Request) -> JSONResponse:
             "senders": senders,
         })
     up = uptime_seconds()
+    # One clock read, so ages derived from server_time match the presence colours.
+    now = datetime.now(timezone.utc)
     return JSONResponse({
         "service": "claude-bridge",
         "status": "online",
@@ -2446,8 +2452,8 @@ async def api_state(request: Request) -> JSONResponse:
         "sse_dropped_events": _dropped_events_total,
         "retention_days": RETENTION_DAYS,
         "audit_enabled": AUDIT_ENABLED,
-        "server_time": utc_now_iso(),
-        "participants": _participants_state(datetime.now(timezone.utc)),
+        "server_time": iso_z(now),
+        "participants": _participants_state(now),
     })
 
 

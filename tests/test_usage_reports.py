@@ -91,6 +91,8 @@ def test_a_new_report_replaces_the_old_one_and_keeps_the_task(client):
         ({"weekly": {"used_pct": 1, "resets_at": "soon"}}, "weekly.resets_at"),
         ({"weekly": {"used_pct": 1, "resets_at": "2026-01-01T00:00:00"}}, "weekly.resets_at"),
         ({"weekly": {"used_pct": 1, "resets_at": 1e30}}, "weekly.resets_at"),
+        ({"weekly": {"used_pct": 1, "resets_at": "9999-12-31T23:59:59-01:00"}}, "weekly.resets_at"),
+        ({"weekly": {"used_pct": 1, "resets_at": "0001-01-01T00:00:00+01:00"}}, "weekly.resets_at"),
         ({"weekly": {"used_pct": 1, "resets_at": [1]}}, "weekly.resets_at"),
     ],
 )

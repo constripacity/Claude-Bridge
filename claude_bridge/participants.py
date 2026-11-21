@@ -147,15 +147,20 @@ def _parse_resets_at(value: Any, field: str) -> str | None:
             field, "invalid_type", "must be unix seconds or an ISO-8601 string"
         )
     try:
-        if isinstance(value, str):
-            instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        else:
-            instant = datetime.fromtimestamp(value, timezone.utc)
+        instant = _instant_from(value)
+        # The UTC conversion overflows near datetime.min/max, so it stays in the try.
+        stamp = None if instant.tzinfo is None else _timestamp(instant)
     except (ValueError, OverflowError, OSError) as exc:
         raise BridgeValidationError(field, "invalid", "is not a valid time") from exc
-    if instant.tzinfo is None:
+    if stamp is None:
         raise BridgeValidationError(field, "invalid", "must include a UTC offset")
-    return _timestamp(instant)
+    return stamp
+
+
+def _instant_from(value: float | str) -> datetime:
+    if isinstance(value, str):
+        return _parse_timestamp(value)
+    return datetime.fromtimestamp(value, timezone.utc)
 
 
 def _window_columns(window: UsageWindow | None) -> tuple[float | None, str | None]:

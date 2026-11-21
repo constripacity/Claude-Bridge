@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
@@ -165,13 +166,20 @@ DERIVED_TITLE_CHARS = 80
 
 def derive_task_title(payload: str) -> str | None:
     """A short title from a payload: its `title`/`task` field, else its text."""
-    first_line = next(
-        (line for line in _title_source(payload).splitlines() if line.strip()), ""
-    )
+    lines = (_drop_controls(line) for line in _title_source(payload).splitlines())
+    first_line = next((line for line in lines if line.strip()), "")
     title = " ".join(first_line.split())
     if len(title) > DERIVED_TITLE_CHARS:
         return title[: DERIVED_TITLE_CHARS - 1] + "…"
     return title or None
+
+
+def _drop_controls(line: str) -> str:
+    # Whitespace controls such as tab stay, so the collapse turns them into a space.
+    return "".join(
+        char for char in line
+        if char.isspace() or unicodedata.category(char) != "Cc"
+    )
 
 
 def _title_source(payload: str) -> str:

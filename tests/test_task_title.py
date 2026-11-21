@@ -9,7 +9,7 @@ import pytest
 
 import claude_bridge.server as bridge
 from claude_bridge.taskqueue import DERIVED_TITLE_CHARS, derive_task_title
-from claude_bridge.validation import BridgeValidationError
+from claude_bridge.validation import BridgeValidationError, validate_title
 
 from .legacy_schema import create_v130_database
 
@@ -44,10 +44,18 @@ async def claim(channel="jobs"):
         ('["title"]', '["title"]'),
         ("", None),
         ("   \n\t", None),
+        ("\x1b[31mred\x00 alert\x7f", "[31mred alert"),
+        ('{"title": "a\\u0000b\\tc"}', "ab c"),
+        ("\x1b\n\x00 \nreal", "real"),
     ],
 )
 def test_derive_task_title(payload, expected):
     assert derive_task_title(payload) == expected
+
+
+def test_derived_title_passes_title_validation():
+    title = derive_task_title("\x1b[1mbold\x07 job\x00")
+    assert validate_title(title) == title
 
 
 def test_derived_title_is_cut_with_an_ellipsis():

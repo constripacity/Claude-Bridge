@@ -78,7 +78,6 @@ from .participants import (
     ensure_participants_schema,
     overview_to_dict,
     parse_usage_report,
-    participant_to_dict,
 )
 from .taskqueue import (
     MAX_NOTE_BYTES,
@@ -98,6 +97,7 @@ from .taskqueue import (
     notes_to_dicts,
     task_to_dict,
 )
+from .timestamps import parse_timestamp
 from .validation import (
     DEFAULT_LIMITS,
     BridgeValidationError,
@@ -1873,10 +1873,15 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="bridge_participants",
             description=(
-                "List bridge participants (senders and task consumers): when each "
-                "was last seen and the newest task it holds a live lease on, with "
-                "that task's channel. Newest first, up to limit. Names are "
-                "self-declared. Read-only."
+                "List bridge participants (senders and task consumers), newest first, "
+                "up to limit, with the same data as the dashboard: presence "
+                "(online/idle/offline), the live task (id, title, claimed_since) and its "
+                "channel, open_tasks (tasks it enqueued that are not finished) and its "
+                "latest Claude usage: the 5 h session and weekly windows (used_pct, "
+                "resets_at), reported_at and stale_at. Use it to check the workers' "
+                "usage and pick the one with the most headroom. Usage comes from each "
+                "session's statusLine reporter; null means not reported, and a report "
+                "past stale_at is stale. Names are self-declared. Read-only."
             ),
             inputSchema={
                 "type": "object",
@@ -2375,23 +2380,15 @@ async def dispatch_tool(
 
     # ── bridge_participants ──────────────────────────────────────────────────
     elif name == "bridge_participants":
-        participants = participant_store().list_recent(
-            limit=normalize_limit(
-                arguments.get("limit"), default=PARTICIPANT_LIST_LIMIT, maximum=500
-            )
+        now = datetime.now(timezone.utc)
+        limit = normalize_limit(
+            arguments.get("limit"), default=PARTICIPANT_LIST_LIMIT, maximum=500
         )
+        participants = _participants_state(now, limit=limit)
         lines = [f"{len(participants)} participant(s)"]
-        for p in participants:
-            holding = (
-                f" · task {p.current_task_id} on [{p.current_channel}]"
-                if p.current_task_id
-                else ""
-            )
-            lines.append(f"  {p.name} · seen {p.last_seen}{holding}")
+        lines += [f"  {_participant_line(entry, now)}" for entry in participants]
         return _tool_output(
-            "\n".join(lines),
-            {"participants": [participant_to_dict(p) for p in participants]},
-            structured=structured,
+            "\n".join(lines), {"participants": participants}, structured=structured
         )
 
     raise ValueError(f"Unknown tool: {name}")
@@ -2463,9 +2460,67 @@ async def api_state(request: Request) -> JSONResponse:
     })
 
 
-def _participants_state(now: datetime) -> list[dict]:
-    overviews = participant_store().list_overview(limit=PARTICIPANT_LIST_LIMIT, now=now)
+def _participants_state(now: datetime, *, limit: int = PARTICIPANT_LIST_LIMIT) -> list[dict]:
+    overviews = participant_store().list_overview(limit=limit, now=now)
     return [overview_to_dict(overview, now) for overview in overviews]
+
+
+def _participant_line(entry: dict, now: datetime) -> str:
+    """One text line from a _participants_state entry: presence, usage, then work."""
+    return " · ".join([
+        entry["name"],
+        entry["presence"],
+        *_usage_fields(entry["usage"], now),
+        _task_field(entry),
+        *_open_tasks_fields(entry["open_tasks"]),
+    ])
+
+
+def _open_tasks_fields(open_tasks: int) -> list[str]:
+    return [f"{open_tasks} enqueued task(s) open"] if open_tasks else []
+
+
+def _usage_fields(usage: dict | None, now: datetime) -> list[str]:
+    if usage is None:
+        return ["usage: not reported"]
+    windows = [
+        _usage_window_field("5h", usage["session"], _clock_time),
+        _usage_window_field("wk", usage["weekly"], _calendar_date),
+    ]
+    return [*filter(None, windows), _usage_age_field(usage, now)]
+
+
+def _usage_window_field(
+    label: str, window: dict | None, reset_text: Callable[[str], str]
+) -> str | None:
+    if window is None:
+        return None
+    field = f"{label} {window['used_pct']:.0f}%"
+    if window["resets_at"]:
+        field += f" (resets {reset_text(window['resets_at'])})"
+    return field
+
+
+def _clock_time(stamp: str) -> str:
+    return f"{stamp[11:16]}Z"  # Stored resets are UTC: "...T01:20:00.000000Z" -> "01:20Z".
+
+
+def _calendar_date(stamp: str) -> str:
+    return stamp[:10]
+
+
+def _usage_age_field(usage: dict, now: datetime) -> str:
+    age = now - parse_timestamp(usage["reported_at"])
+    stale = " (stale)" if now > parse_timestamp(usage["stale_at"]) else ""
+    return f"usage {max(0, int(age.total_seconds() // 60))} min old{stale}"
+
+
+def _task_field(entry: dict) -> str:
+    task = entry["current_task"]
+    if task is None:
+        return "no task"
+    label = f"{task['title']} ({task['id']})" if task["title"] else task["id"]
+    return f"task {label} on [{entry['current_channel']}]"
 
 
 async def api_messages(request: Request) -> JSONResponse:

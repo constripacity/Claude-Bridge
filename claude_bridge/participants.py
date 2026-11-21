@@ -309,17 +309,8 @@ class ParticipantStore:
             (last_seen_before,),
         ).rowcount
 
-    def list_recent(self, *, limit: int) -> list[Participant]:
-        """The `limit` participants seen most recently, newest first."""
-        rows = self._conn.execute(
-            "SELECT name, last_seen, current_channel, current_task_id "
-            "FROM participants ORDER BY last_seen DESC, name LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [Participant(*tuple(row)) for row in rows]
-
     def list_overview(self, *, limit: int, now: datetime) -> list[ParticipantOverview]:
-        """Like list_recent, joined in one query to its live task and open task counts."""
+        """The `limit` participants seen most recently, newest first, with task and usage."""
         cursor = self._conn.cursor()
         cursor.row_factory = sqlite3.Row  # Named columns, whatever the connection uses.
         rows = cursor.execute(
@@ -343,12 +334,8 @@ class ParticipantStore:
         return [_overview_from_row(row) for row in rows]
 
 
-def participant_to_dict(participant: Participant) -> dict:
-    return asdict(participant)
-
-
 def overview_to_dict(overview: ParticipantOverview, now: datetime) -> dict:
-    """Serialize for the dashboard; presence is computed against `now`."""
+    """Serialize for the dashboard and bridge_participants; presence is against `now`."""
     participant = overview.participant
     return {
         "name": participant.name,
@@ -391,6 +378,5 @@ __all__ = [
     "ensure_participants_schema",
     "overview_to_dict",
     "parse_usage_report",
-    "participant_to_dict",
     "presence",
 ]

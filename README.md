@@ -218,7 +218,7 @@ before making support claims.
 | `bridge_tasks` | Inspect a channel's queue: per-status counts and a task list (with `worked_by`) |
 | `bridge_task_note` | Attach a note to a pending or claimed task for its worker |
 | `bridge_task_notes` | Read a claimed task's new notes, fenced by its `lease_token` |
-| `bridge_participants` | List participants: last seen and the task each one holds |
+| `bridge_participants` | List participants: presence, live task and Claude usage |
 | `bridge_replace` | Replace a pending task's payload in place (original enqueuer only; resets `attempts`, needs `enqueued_by`) |
 
 Tool results include structured data for clients that support MCP structured
@@ -331,8 +331,12 @@ bounded: 16 KiB per note (`content`/`too_large`), 64 KiB in total per task
 (`content`/`task_notes_too_large`) and 100 notes per task (`task_id`/`too_many_notes`).
 
 `bridge_participants` lists senders and consumers, newest first (`limit`, default
-100, max 500), with `last_seen` and the newest task each holds a live lease on.
-Names are self-declared, because all
+100, max 500), with the same entries as `participants` in `/api/state` (see
+below): presence, the live task, open tasks and the latest Claude usage. Its text
+has one line per participant, for example
+`w1 · online · 5h 42% (resets 01:20Z) · wk 71% (resets 2026-11-27) · usage 3 min old · no task`,
+with `(stale)` after a stale report and `usage: not reported` without one, so an
+agent can pick the worker with the most headroom. Names are self-declared, because all
 clients share one bearer token: treat the list as a presence hint, not identity.
 
 ### Report Claude usage from the status line

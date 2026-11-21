@@ -16,6 +16,8 @@ import claude_bridge.server as bridge
 from claude_bridge.taskqueue import TaskStatus
 from claude_bridge.validation import BridgeValidationError
 
+from .legacy_schema import create_v130_database
+
 T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
@@ -335,3 +337,47 @@ def test_default_lease_is_clamped_to_max(monkeypatch):
     assert bridge._clamp_lease_seconds(None) == 3600  # default clamped down
     assert bridge._clamp_lease_seconds(10000) == 3600  # explicit clamped down
     assert bridge._clamp_lease_seconds(100) == 100  # within range, untouched
+
+
+# ── Ownership history (worked_by) ─────────────────────────────────────────────
+
+
+def test_worked_by_survives_complete(fresh_db):
+    store = bridge.task_store()
+    store.enqueue(channel="q", payload="A", now=at(0))
+    c = store.claim(channel="q", consumer="w1", lease_seconds=60, now=at(0))
+    assert c.worked_by == "w1"
+    done = store.complete(channel="q", task_id=c.id, lease_token=c.lease_token, now=at(1))
+    assert done.lease_owner is None and done.worked_by == "w1"
+
+
+def test_worked_by_survives_fail_and_follows_the_next_claim(fresh_db):
+    store = bridge.task_store()
+    store.enqueue(channel="q", payload="A", max_attempts=3, now=at(0))
+    c1 = store.claim(channel="q", consumer="w1", lease_seconds=60, now=at(0))
+    failed = store.fail(channel="q", task_id=c1.id, lease_token=c1.lease_token, now=at(1))
+    assert failed.status is TaskStatus.PENDING and failed.worked_by == "w1"
+    c2 = store.claim(channel="q", consumer="w2", lease_seconds=60, now=at(2))
+    assert c2.worked_by == "w2"
+
+
+@pytest.mark.asyncio
+async def test_task_views_expose_worked_by(fresh_db):
+    await call("bridge_enqueue", {"channel": "jobs", "content": "a"})
+    claim = await call("bridge_claim", {"channel": "jobs", "consumer": "w1"})
+    assert claim["task"]["worked_by"] == "w1"
+    listed = await call("bridge_tasks", {"channel": "jobs"})
+    assert listed["tasks"][0]["worked_by"] == "w1"
+
+
+def test_v130_database_migrates_in_place(tmp_path, monkeypatch):
+    db_path = tmp_path / "old.db"
+    create_v130_database(str(db_path), pending_task_id="tsk_legacy")
+    monkeypatch.setattr(bridge, "DB_PATH", str(db_path))
+    monkeypatch.setattr(bridge, "_conn", None)
+    try:
+        claimed = bridge.task_store().claim(channel="old", consumer="w", lease_seconds=60)
+        assert claimed.id == "tsk_legacy" and claimed.worked_by == "w"
+    finally:
+        bridge._conn.close()
+        monkeypatch.setattr(bridge, "_conn", None)

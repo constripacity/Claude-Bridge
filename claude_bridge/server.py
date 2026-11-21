@@ -1012,6 +1012,7 @@ async def enqueue_task_reliable(
     delay_seconds: int = 0,
     idempotency_key: str | None = None,
     enqueued_by: str | None = None,
+    title: str | None = None,
 ):
     result = await _write_transaction(
         lambda: task_store().enqueue(
@@ -1024,6 +1025,7 @@ async def enqueue_task_reliable(
             delay_seconds=delay_seconds,
             idempotency_key=idempotency_key,
             enqueued_by=enqueued_by,
+            title=title,
         )
     )
     if result.created:
@@ -1190,6 +1192,7 @@ async def replace_task_reliable(
     payload: str,
     priority: int | None = None,
     delay_seconds: int | None = None,
+    title: str | None = None,
 ):
     task = await _write_transaction(
         lambda: task_store().replace(
@@ -1199,6 +1202,7 @@ async def replace_task_reliable(
             payload=payload,
             priority=priority,
             delay_seconds=delay_seconds,
+            title=title,
         )
     )
     # A new priority or delay can make the task claimable now; wake waiters.
@@ -1370,6 +1374,12 @@ mcp_http = RestartableStreamableHTTPApp(
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     object_output = {"type": "object", "additionalProperties": True}
+    title_input = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120,
+        "description": "Short task title; derived from the payload when omitted",
+    }
     return [
         Tool(
             name="bridge_send",
@@ -1596,6 +1606,7 @@ async def list_tools() -> list[Tool]:
                         "maxLength": 256,
                     },
                     "enqueued_by": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "title": title_input,
                 },
                 "required": ["channel"],
                 "oneOf": [
@@ -1736,6 +1747,7 @@ async def list_tools() -> list[Tool]:
                         "maximum": 1000000000,
                         "description": "New delay from now; omit to keep the current one",
                     },
+                    "title": title_input,
                 },
                 "required": ["channel", "task_id", "sender"],
                 "oneOf": [
@@ -2167,6 +2179,7 @@ async def dispatch_tool(
             delay_seconds=arguments.get("delay_seconds", 0),
             idempotency_key=arguments.get("idempotency_key"),
             enqueued_by=arguments.get("enqueued_by"),
+            title=arguments.get("title"),
         )
         task = outcome.task
         verb = "Enqueued" if outcome.created else "Deduplicated (existing)"
@@ -2200,6 +2213,7 @@ async def dispatch_tool(
             f"✓ Claimed task {task.id} on [{channel}] "
             f"(attempt {task.attempts}/{task.max_attempts}, "
             f"lease until {task.lease_expires_at})\n"
+            f"  title: {task.title or '—'}\n"
             f"  lease_token: {task.lease_token}"
             + _notes_text("notes", notes),
             {
@@ -2273,6 +2287,7 @@ async def dispatch_tool(
                 payload=_task_payload(arguments),
                 priority=arguments.get("priority"),
                 delay_seconds=arguments.get("delay_seconds"),
+                title=arguments.get("title"),
             )
         return _tool_output(
             f"✓ Replaced task {task.id} on [{channel}] (status {task.status.value})",
@@ -2297,6 +2312,7 @@ async def dispatch_tool(
         for t in tasks:
             lines.append(
                 f"  {t.id} · {t.status.value} · attempt {t.attempts}/{t.max_attempts}"
+                + (f" · {t.title}" if t.title else "")
             )
         return _tool_output(
             "\n".join(lines),

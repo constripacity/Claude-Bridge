@@ -21,6 +21,7 @@ Guarantees:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -39,6 +40,7 @@ from .validation import (
     validate_non_negative_int,
     validate_reference,
     validate_sender,
+    validate_title,
 )
 
 TASKQUEUE_SCHEMA_VERSION = 1
@@ -139,10 +141,42 @@ def _require_text(value: object, field: str, max_bytes: int) -> str:
     return value
 
 
+DERIVED_TITLE_CHARS = 80
+
+
+def derive_task_title(payload: str) -> str | None:
+    """A short title from a payload: its `title`/`task` field, else its text."""
+    first_line = next(
+        (line for line in _title_source(payload).splitlines() if line.strip()), ""
+    )
+    title = " ".join(first_line.split())
+    if len(title) > DERIVED_TITLE_CHARS:
+        return title[: DERIVED_TITLE_CHARS - 1] + "…"
+    return title or None
+
+
+def _title_source(payload: str) -> str:
+    try:
+        parsed = json.loads(payload)
+    except (ValueError, RecursionError):
+        return payload
+    if isinstance(parsed, dict):
+        for field in ("title", "task"):
+            value = parsed.get(field)
+            if isinstance(value, str) and value.strip():
+                return value
+    return payload
+
+
+def _resolve_title(title: str | None, payload: str) -> str | None:
+    return derive_task_title(payload) if title is None else validate_title(title)
+
+
 # Columns added after v1.3.0; an older DB gets them in place on startup.
 _TASK_ADDED_COLUMNS = {
     "worked_by": "TEXT",
     "notes_read_seq": "INTEGER NOT NULL DEFAULT 0",
+    "title": "TEXT",
 }
 
 
@@ -214,6 +248,7 @@ def ensure_taskqueue_schema(conn: sqlite3.Connection) -> None:
                 enqueued_by      TEXT,
                 worked_by        TEXT,
                 notes_read_seq   INTEGER NOT NULL DEFAULT 0,
+                title            TEXT,
                 created_at       TEXT    NOT NULL,
                 updated_at       TEXT    NOT NULL,
                 CHECK (
@@ -297,6 +332,7 @@ class Task:
     enqueued_by: str | None
     worked_by: str | None  # Last consumer that claimed the task; never cleared.
     notes_read_seq: int  # Highest note seq delivered to the current lease.
+    title: str | None
     created_at: str
     updated_at: str
 
@@ -414,10 +450,12 @@ class TaskStore:
         delay_seconds: int = 0,
         idempotency_key: str | None = None,
         enqueued_by: str | None = None,
+        title: str | None = None,
         now: datetime | None = None,
     ) -> EnqueueResult:
         channel = validate_channel(channel)
         payload = _require_text(payload, "payload", DEFAULT_LIMITS.max_message_bytes)
+        title = _resolve_title(title, payload)
         priority = validate_non_negative_int(priority, "priority", maximum=_MAX_COUNT)
         max_attempts = validate_non_negative_int(
             max_attempts, "max_attempts", maximum=_MAX_COUNT
@@ -449,8 +487,9 @@ class TaskStore:
                     return EnqueueResult(task=_task_from_row(existing), created=False)
             self.conn.execute(
                 "INSERT INTO tasks (id, channel, payload, status, priority, attempts, "
-                "max_attempts, available_at, idempotency_key, enqueued_by, created_at, "
-                "updated_at) VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, ?, ?, ?, ?)",
+                "max_attempts, available_at, idempotency_key, enqueued_by, title, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id,
                     channel,
@@ -460,6 +499,7 @@ class TaskStore:
                     available_at,
                     idempotency_key,
                     enqueued_by,
+                    title,
                     created_at,
                     created_at,
                 ),
@@ -706,6 +746,7 @@ class TaskStore:
         payload: str,
         priority: int | None = None,
         delay_seconds: int | None = None,
+        title: str | None = None,
         now: datetime | None = None,
     ) -> Task:
         """Swap a pending task's payload in place; id and queue position stay.
@@ -716,6 +757,7 @@ class TaskStore:
         task_id = validate_reference(task_id, "task_id")
         sender = validate_reference(sender, "sender")
         payload = _require_text(payload, "payload", DEFAULT_LIMITS.max_message_bytes)
+        title = _resolve_title(title, payload)
         if priority is not None:
             priority = validate_non_negative_int(priority, "priority", maximum=_MAX_COUNT)
         instant = _as_utc(now or _utc_now())
@@ -730,10 +772,18 @@ class TaskStore:
             current = self._require_replaceable(channel, task_id, sender)
             # A replaced task is new work, so earlier attempts and errors no longer apply.
             self.conn.execute(
-                "UPDATE tasks SET payload = ?, priority = COALESCE(?, priority), "
+                "UPDATE tasks SET payload = ?, title = ?, "
+                "priority = COALESCE(?, priority), "
                 "available_at = COALESCE(?, available_at), attempts = 0, "
                 "last_error = NULL, updated_at = ? WHERE seq = ?",
-                (payload, priority, available_at, _timestamp(instant), current.seq),
+                (
+                    payload,
+                    title,
+                    priority,
+                    available_at,
+                    _timestamp(instant),
+                    current.seq,
+                ),
             )
             row = self.conn.execute(
                 _TASK_SELECT + "WHERE seq = ?", (current.seq,)
@@ -856,6 +906,7 @@ def task_to_dict(task: Task, *, include_payload: bool = True) -> dict:
     data = {
         "task_id": task.id,
         "channel": task.channel,
+        "title": task.title,
         "status": task.status.value,
         "priority": task.priority,
         "attempts": task.attempts,
@@ -909,6 +960,7 @@ __all__ = [
     "TaskStatus",
     "TaskStore",
     "TaskWithNotes",
+    "derive_task_title",
     "ensure_taskqueue_schema",
     "note_to_dict",
     "notes_to_dicts",

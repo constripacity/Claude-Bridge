@@ -32,6 +32,7 @@ class ValidationLimits:
     max_sender_chars: int = 128
     max_consumer_chars: int = 128
     max_reference_chars: int = 256
+    max_title_chars: int = 120
     max_idempotency_key_chars: int = 256
     max_message_type_chars: int = 64
     max_message_bytes: int = 128 * 1024
@@ -105,6 +106,10 @@ def validate_sender(value: Any, limits: ValidationLimits = DEFAULT_LIMITS) -> st
 
 def validate_consumer(value: Any, limits: ValidationLimits = DEFAULT_LIMITS) -> str:
     return _validate_identity(value, "consumer_id", limits.max_consumer_chars)
+
+
+def validate_title(value: Any, limits: ValidationLimits = DEFAULT_LIMITS) -> str:
+    return _validate_identity(value, "title", limits.max_title_chars)
 
 
 def validate_reference(
@@ -339,5 +344,6 @@ __all__ = [
     "validate_raw_content",
     "validate_reference",
     "validate_sender",
+    "validate_title",
     "validate_sha256",
 ]

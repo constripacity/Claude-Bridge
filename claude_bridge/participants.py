@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .migrations import add_missing_columns
+from .timestamps import utc_timestamp
 from .validation import BridgeValidationError
 
 # Usage columns added after the participants table first shipped.
@@ -52,14 +53,8 @@ _LIVE_LEASE = (
 )
 
 
-def _timestamp(value: datetime) -> str:
-    # Same fixed-width format as task timestamps, so text order is time order.
-    stamp = value.astimezone(timezone.utc).isoformat(timespec="microseconds")
-    return stamp.replace("+00:00", "Z")
-
-
 def _now_iso() -> str:
-    return _timestamp(datetime.now(timezone.utc))
+    return utc_timestamp(datetime.now(timezone.utc))
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -120,6 +115,11 @@ def _parse_usage_window(value: Any, field: str) -> UsageWindow | None:
         return None
     if not isinstance(value, dict):
         raise BridgeValidationError(field, "invalid_type", "must be an object")
+    unknown = sorted(set(value) - {"used_pct", "resets_at"})
+    if unknown:
+        raise BridgeValidationError(
+            f"{field}.{unknown[0]}", "unknown_field", "is not a usage window field"
+        )
     return UsageWindow(
         used_pct=_parse_used_pct(value.get("used_pct"), f"{field}.used_pct"),
         resets_at=_parse_resets_at(value.get("resets_at"), f"{field}.resets_at"),
@@ -149,7 +149,7 @@ def _parse_resets_at(value: Any, field: str) -> str | None:
     try:
         instant = _instant_from(value)
         # The UTC conversion overflows near datetime.min/max, so it stays in the try.
-        stamp = None if instant.tzinfo is None else _timestamp(instant)
+        stamp = None if instant.tzinfo is None else utc_timestamp(instant)
     except (ValueError, OverflowError, OSError) as exc:
         raise BridgeValidationError(field, "invalid", "is not a valid time") from exc
     if stamp is None:
@@ -190,23 +190,28 @@ class ParticipantOverview:
     usage_reported_at: str | None
 
 
-def _overview_from_row(row: sqlite3.Row | tuple) -> ParticipantOverview:
-    (name, last_seen, channel, task_id, task_title, claimed_since,
-     session_pct, session_resets, weekly_pct, weekly_resets, reported_at) = tuple(row)
-    current_task = (
-        None if claimed_since is None else CurrentTask(task_id, task_title, claimed_since)
-    )
+def _overview_from_row(row: sqlite3.Row) -> ParticipantOverview:
+    task_id = row["current_task_id"]
+    current_task = None
+    if row["claimed_since"] is not None:
+        current_task = CurrentTask(task_id, row["task_title"], row["claimed_since"])
     usage = None
-    if reported_at is not None:
+    if row["usage_reported_at"] is not None:
         usage = UsageReport(
-            session=_window_from_columns(session_pct, session_resets),
-            weekly=_window_from_columns(weekly_pct, weekly_resets),
+            session=_window_from_columns(
+                row["usage_session_pct"], row["usage_session_resets_at"]
+            ),
+            weekly=_window_from_columns(
+                row["usage_weekly_pct"], row["usage_weekly_resets_at"]
+            ),
         )
     return ParticipantOverview(
-        participant=Participant(name, last_seen, channel, task_id),
+        participant=Participant(
+            row["name"], row["last_seen"], row["current_channel"], task_id
+        ),
         current_task=current_task,
         usage=usage,
-        usage_reported_at=reported_at,
+        usage_reported_at=row["usage_reported_at"],
     )
 
 
@@ -294,15 +299,18 @@ class ParticipantStore:
 
     def list_overview(self, *, limit: int, now: datetime) -> list[ParticipantOverview]:
         """Like list_recent, joined in one query to the task each one holds live."""
-        rows = self._conn.execute(
+        cursor = self._conn.cursor()
+        cursor.row_factory = sqlite3.Row  # Named columns, whatever the connection uses.
+        rows = cursor.execute(
             "SELECT p.name, p.last_seen, p.current_channel, p.current_task_id, "
-            "t.title, t.updated_at, p.usage_session_pct, p.usage_session_resets_at, "
+            "t.title AS task_title, t.updated_at AS claimed_since, "
+            "p.usage_session_pct, p.usage_session_resets_at, "
             "p.usage_weekly_pct, p.usage_weekly_resets_at, p.usage_reported_at "
             "FROM participants p LEFT JOIN tasks t ON t.id = p.current_task_id "
             "AND t.lease_owner = p.name AND t.status = 'claimed' "
             "AND t.lease_expires_at > ? "
             "ORDER BY p.last_seen DESC, p.name LIMIT ?",
-            (_timestamp(now), limit),
+            (utc_timestamp(now), limit),
         ).fetchall()
         return [_overview_from_row(row) for row in rows]
 

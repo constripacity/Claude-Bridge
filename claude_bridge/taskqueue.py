@@ -33,6 +33,7 @@ from enum import Enum
 from typing import Iterator
 
 from .migrations import add_missing_columns
+from .timestamps import as_utc, utc_timestamp
 from .validation import (
     DEFAULT_LIMITS,
     BridgeValidationError,
@@ -136,16 +137,6 @@ class TaskStatus(str, Enum):
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        raise ValueError("datetime must be timezone-aware")
-    return value.astimezone(timezone.utc)
-
-
-def _timestamp(value: datetime) -> str:
-    return _as_utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _require_text(value: object, field: str, max_bytes: int) -> str:
@@ -320,7 +311,7 @@ def ensure_taskqueue_schema(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_tasks_channel_status "
             "ON tasks(channel, status)"
         )
-        now = _timestamp(_utc_now())
+        now = utc_timestamp(_utc_now())
         conn.execute(
             "INSERT INTO bridge_schema_components(component, version, updated_at) "
             "VALUES (?, ?, ?) ON CONFLICT(component) DO UPDATE SET "
@@ -490,9 +481,9 @@ class TaskStore:
         if enqueued_by is not None:
             enqueued_by = validate_reference(enqueued_by, "enqueued_by")
 
-        instant = _as_utc(now or _utc_now())
-        created_at = _timestamp(instant)
-        available_at = _timestamp(instant + timedelta(seconds=delay_seconds))
+        instant = as_utc(now or _utc_now())
+        created_at = utc_timestamp(instant)
+        available_at = utc_timestamp(instant + timedelta(seconds=delay_seconds))
         task_id = "tsk_" + uuid.uuid4().hex
 
         with self._lock, _savepoint(self.conn):
@@ -546,9 +537,9 @@ class TaskStore:
             raise BridgeValidationError(
                 "lease_seconds", "out_of_range", "must be at least 1"
             )
-        instant = _as_utc(now or _utc_now())
-        now_iso = _timestamp(instant)
-        lease_expires_at = _timestamp(instant + timedelta(seconds=lease_seconds))
+        instant = as_utc(now or _utc_now())
+        now_iso = utc_timestamp(instant)
+        lease_expires_at = utc_timestamp(instant + timedelta(seconds=lease_seconds))
         lease_token = uuid.uuid4().hex
 
         with self._lock, _savepoint(self.conn):
@@ -588,7 +579,7 @@ class TaskStore:
         lease_token = validate_reference(lease_token, "lease_token")
         if result is not None:
             result = _require_text(result, "result", DEFAULT_LIMITS.max_message_bytes)
-        now_iso = _timestamp(_as_utc(now or _utc_now()))
+        now_iso = utc_timestamp(now or _utc_now())
 
         with self._lock, _savepoint(self.conn):
             cur = self.conn.execute(
@@ -623,9 +614,9 @@ class TaskStore:
         retry_delay_seconds = validate_non_negative_int(
             retry_delay_seconds, "retry_delay_seconds", maximum=_MAX_TASK_SECONDS
         )
-        instant = _as_utc(now or _utc_now())
-        now_iso = _timestamp(instant)
-        available_at = _timestamp(instant + timedelta(seconds=retry_delay_seconds))
+        instant = as_utc(now or _utc_now())
+        now_iso = utc_timestamp(instant)
+        available_at = utc_timestamp(instant + timedelta(seconds=retry_delay_seconds))
 
         with self._lock, _savepoint(self.conn):
             row = self.conn.execute(
@@ -672,7 +663,7 @@ class TaskStore:
         if not content.strip():
             raise BridgeValidationError("content", "required", "must not be empty")
         note_id = "note_" + uuid.uuid4().hex
-        created_at = _timestamp(_as_utc(now or _utc_now()))
+        created_at = utc_timestamp(now or _utc_now())
 
         with self._lock, _savepoint(self.conn):
             task = self._get(channel, task_id)
@@ -778,13 +769,13 @@ class TaskStore:
         title = _resolve_title(title, payload)
         if priority is not None:
             priority = validate_non_negative_int(priority, "priority", maximum=_MAX_COUNT)
-        instant = _as_utc(now or _utc_now())
+        instant = as_utc(now or _utc_now())
         available_at = None
         if delay_seconds is not None:
             delay_seconds = validate_non_negative_int(
                 delay_seconds, "delay_seconds", maximum=_MAX_TASK_SECONDS
             )
-            available_at = _timestamp(instant + timedelta(seconds=delay_seconds))
+            available_at = utc_timestamp(instant + timedelta(seconds=delay_seconds))
 
         with self._lock, _savepoint(self.conn):
             current = self._require_replaceable(channel, task_id, sender)
@@ -799,7 +790,7 @@ class TaskStore:
                     title,
                     priority,
                     available_at,
-                    _timestamp(instant),
+                    utc_timestamp(instant),
                     current.seq,
                 ),
             )
@@ -861,7 +852,7 @@ class TaskStore:
         self, *, now: datetime | None = None, limit: int = 1000
     ) -> SweepResult:
         """Background sweep: requeue or dead-letter leases past their timeout."""
-        instant = _timestamp(_as_utc(now or _utc_now()))
+        instant = utc_timestamp(now or _utc_now())
         limit = normalize_limit(limit, default=1000, maximum=10_000)
         with self._lock, _savepoint(self.conn):
             requeued = self.conn.execute(

@@ -364,6 +364,9 @@ committed file:
 | `CLAUDE_BRIDGE_TOKEN` | The bridge bearer token, if the bridge uses one |
 | `CLAUDE_BRIDGE_PARTICIPANT` | The participant name, the same as your `sender`/`consumer` |
 
+The script sends the bearer token with every report. Use an `https://` URL, or
+plain HTTP only on loopback or through a trusted proxy.
+
 ## Channels
 
 Channels are created on first write. A readable convention is
@@ -423,7 +426,9 @@ hours, else `offline`, by server time), `current_task` (`id`, `title`,
 `claimed_since`) or `null`, and `usage` or `null`. The usage endpoint takes
 `{"session": {"used_pct": 42, "resets_at": 1767225600}, "weekly": {...}}`:
 each window is optional, `used_pct` is 0..100 and `resets_at` is unix seconds
-or ISO-8601 with an offset. A report replaces the one before.
+or ISO-8601 with an offset; any other key is a 400. A report replaces the one
+before. The `{name}` segment follows the participant name rules, so it may hold
+`/` (raw or as `%2F`).
 
 The event stream can drop a slow subscriber after its buffer fills; durable
 history remains authoritative. Reconnect with the last message ID and honor

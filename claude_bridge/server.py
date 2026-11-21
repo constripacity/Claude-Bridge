@@ -146,6 +146,9 @@ MAX_SSE_SUBSCRIBERS = SETTINGS.max_sse_subscribers
 MAX_SSE_PER_CHANNEL = SETTINGS.max_sse_per_channel
 SSE_REPLAY_LIMIT = SETTINGS.sse_replay_limit
 
+# Participants per bridge_participants call (by default) and per /api/state.
+PARTICIPANT_LIST_LIMIT = 100
+
 # Message retention. 0 = keep forever (the default — the bridge is a transport,
 # not an archive, but a long-running host shouldn't grow SQLite without bound).
 # When > 0, a background sweep deletes messages whose timestamp is older than
@@ -1881,7 +1884,7 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 500,
-                        "default": 100,
+                        "default": PARTICIPANT_LIST_LIMIT,
                     },
                 },
                 "additionalProperties": False,
@@ -2372,7 +2375,9 @@ async def dispatch_tool(
     # ── bridge_participants ──────────────────────────────────────────────────
     elif name == "bridge_participants":
         participants = participant_store().list_recent(
-            limit=normalize_limit(arguments.get("limit"), default=100, maximum=500)
+            limit=normalize_limit(
+                arguments.get("limit"), default=PARTICIPANT_LIST_LIMIT, maximum=500
+            )
         )
         lines = [f"{len(participants)} participant(s)"]
         for p in participants:
@@ -2458,7 +2463,7 @@ async def api_state(request: Request) -> JSONResponse:
 
 
 def _participants_state(now: datetime) -> list[dict]:
-    overviews = participant_store().list_overview(limit=100, now=now)
+    overviews = participant_store().list_overview(limit=PARTICIPANT_LIST_LIMIT, now=now)
     return [overview_to_dict(overview, now) for overview in overviews]
 
 

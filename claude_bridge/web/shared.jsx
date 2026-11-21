@@ -213,11 +213,11 @@ function usageColor(pct) {
   return 'var(--blue)';
 }
 
-function UsageBar({ label, window, stale, nowMs, compact }) {
-  if (!window) return null;
-  const pct = Math.min(100, Math.max(0, window.used_pct));
+function UsageBar({ label, usageWindow, stale, nowMs, compact }) {
+  if (!usageWindow) return null;
+  const pct = Math.min(100, Math.max(0, usageWindow.used_pct));
   return (
-    <div title={fmtResetIn(window.resets_at, nowMs)} style={{
+    <div title={fmtResetIn(usageWindow.resets_at, nowMs)} style={{
       display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
       opacity: stale ? 0.4 : 1,
       fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)',
@@ -236,9 +236,9 @@ function UsageBar({ label, window, stale, nowMs, compact }) {
         width: 26, textAlign: 'right', flexShrink: 0,
         color: 'var(--text-mid)', fontVariantNumeric: 'tabular-nums',
       }}>{Math.round(pct)}%</span>
-      {!compact && window.resets_at && (
+      {!compact && usageWindow.resets_at && (
         <span style={{ flexShrink: 0, color: 'var(--text-faint)' }}>
-          ↻ {fmtSpan(-ageMs(window.resets_at, nowMs))}
+          ↻ {fmtSpan(-ageMs(usageWindow.resets_at, nowMs))}
         </span>
       )}
     </div>
@@ -251,8 +251,8 @@ function UsageBars({ usage, nowMs, compact }) {
   return (
     <div title={stale ? `usage reported ${fmtAgo(usage.reported_at, nowMs)}` : undefined}
          style={{ display: 'flex', gap: compact ? 8 : 12 }}>
-      <UsageBar label="5h" window={usage.session} stale={stale} nowMs={nowMs} compact={compact} />
-      <UsageBar label="week" window={usage.weekly} stale={stale} nowMs={nowMs} compact={compact} />
+      <UsageBar label="5h" usageWindow={usage.session} stale={stale} nowMs={nowMs} compact={compact} />
+      <UsageBar label="week" usageWindow={usage.weekly} stale={stale} nowMs={nowMs} compact={compact} />
     </div>
   );
 }

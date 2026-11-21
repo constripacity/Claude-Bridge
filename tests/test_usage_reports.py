@@ -84,6 +84,7 @@ def test_a_new_report_replaces_the_old_one_and_keeps_the_task(client):
         ({"daily": {"used_pct": 1}}, "daily"),
         ({"session": 5}, "session"),
         ({"session": {}}, "session.used_pct"),
+        ({"session": {"used_pct": 1, "used_percentage": 1}}, "session.used_percentage"),
         ({"session": {"used_pct": "5"}}, "session.used_pct"),
         ({"session": {"used_pct": True}}, "session.used_pct"),
         ({"session": {"used_pct": 100.5}}, "session.used_pct"),
@@ -124,7 +125,7 @@ def test_usage_report_needs_a_json_content_type(client):
     assert r.status_code == 415
 
 
-def test_empty_report_clears_the_usage():
+def test_empty_report_has_no_windows():
     report = parse_usage_report({})
     assert report.session is None and report.weekly is None
 

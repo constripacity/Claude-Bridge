@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Iterator, Mapping
 
+from .timestamps import as_utc, utc_timestamp
 from .validation import (
     DEFAULT_LIMITS,
     BridgeValidationError,
@@ -72,16 +73,6 @@ class ReservationStatus(str, Enum):
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        raise ValueError("datetime must be timezone-aware")
-    return value.astimezone(timezone.utc)
-
-
-def _timestamp(value: datetime) -> str:
-    return _as_utc(value).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -174,7 +165,7 @@ def ensure_reliability_schema(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_bridge_cursors_channel "
             "ON bridge_consumer_cursors(channel, last_seq)"
         )
-        now = _timestamp(_utc_now())
+        now = utc_timestamp(_utc_now())
         conn.execute(
             "INSERT INTO bridge_schema_components(component, version, updated_at) "
             "VALUES (?, ?, ?) ON CONFLICT(component) DO UPDATE SET "
@@ -197,7 +188,7 @@ class IdempotencyRecord:
     expires_at: str | None
 
     def is_expired(self, now: datetime | None = None) -> bool:
-        return self.expires_at is not None and _parse_timestamp(self.expires_at) <= _as_utc(
+        return self.expires_at is not None and _parse_timestamp(self.expires_at) <= as_utc(
             now or _utc_now()
         )
 
@@ -310,10 +301,10 @@ class ReliabilityStore:
                 raise BridgeValidationError(
                     "ttl_seconds", "out_of_range", "must be greater than zero"
                 )
-        instant = _as_utc(now or _utc_now())
-        created_at = _timestamp(instant)
+        instant = as_utc(now or _utc_now())
+        created_at = utc_timestamp(instant)
         expires_at = (
-            _timestamp(instant + timedelta(seconds=ttl_seconds))
+            utc_timestamp(instant + timedelta(seconds=ttl_seconds))
             if ttl_seconds is not None
             else None
         )
@@ -379,7 +370,7 @@ class ReliabilityStore:
             raise BridgeValidationError(
                 "message_seq", "out_of_range", "must be greater than zero"
             )
-        instant = _timestamp(_as_utc(now or _utc_now()))
+        instant = utc_timestamp(now or _utc_now())
 
         with self._lock, _savepoint(self.conn):
             self.conn.execute(
@@ -455,7 +446,7 @@ class ReliabilityStore:
     def cleanup_expired_idempotency(
         self, *, now: datetime | None = None, limit: int = 1000
     ) -> int:
-        instant = _timestamp(_as_utc(now or _utc_now()))
+        instant = utc_timestamp(now or _utc_now())
         limit = normalize_limit(limit, default=1000, maximum=10_000)
         with self._lock, _savepoint(self.conn):
             cur = self.conn.execute(
@@ -511,7 +502,7 @@ class ReliabilityStore:
             max_bytes=DEFAULT_LIMITS.max_metadata_bytes,
         )
         metadata_json = canonical_json(metadata_value, field="metadata")
-        updated_at = _timestamp(_as_utc(now or _utc_now()))
+        updated_at = utc_timestamp(now or _utc_now())
 
         with self._lock, _savepoint(self.conn):
             cur = self.conn.execute(
@@ -577,7 +568,7 @@ class ReliabilityStore:
             field="metadata",
             max_bytes=DEFAULT_LIMITS.max_metadata_bytes,
         )
-        updated_at = _timestamp(_as_utc(now or _utc_now()))
+        updated_at = utc_timestamp(now or _utc_now())
         metadata_json = canonical_json(metadata_value, field="metadata")
         with self._lock, _savepoint(self.conn):
             self.conn.execute(

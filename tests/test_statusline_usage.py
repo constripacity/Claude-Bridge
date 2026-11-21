@@ -7,9 +7,12 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 import threading
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -112,30 +115,49 @@ ENV = {"CLAUDE_BRIDGE_URL": "http://bridge", "CLAUDE_BRIDGE_PARTICIPANT": "w1"}
 REPORT = {"session": {"used_pct": 1.0, "resets_at": None}}
 
 
+class _ChildStdin:
+    def __init__(self):
+        self.data = b""
+        self.closed = False
+
+    def write(self, data):
+        self.data += data
+
+    def close(self):
+        self.closed = True
+
+
 @pytest.fixture
-def sent(tmp_path, monkeypatch):
+def spawned(tmp_path, monkeypatch):
+    """A fake Popen; each entry is (argv, options, stdin) of one send child."""
     monkeypatch.setattr(statusline, "stamp_dir", lambda: str(tmp_path / "stamps"))
-    requests = []
+    children = []
 
-    class _Response:
-        def close(self):
-            pass
+    def spawn(argv, **options):
+        stdin = _ChildStdin()
+        children.append((argv, options, stdin))
+        return SimpleNamespace(stdin=stdin)
 
-    class _Opener:
-        def open(self, request, timeout):
-            requests.append((request, timeout))
-            return _Response()
-
-    monkeypatch.setattr(statusline, "OPENER", _Opener())
-    return requests
+    return children, spawn
 
 
-def test_report_usage_throttles_by_the_stamp_file(sent):
-    statusline.report_usage(REPORT, ENV, now=1000.0)
-    statusline.report_usage(REPORT, ENV, now=1030.0)
-    statusline.report_usage(REPORT, ENV, now=1061.0)
-    assert len(sent) == 2
-    assert sent[0][1] == statusline.TIMEOUT_SECONDS
+def test_report_usage_spawns_at_most_one_child_a_minute(spawned):
+    children, spawn = spawned
+    for now in (1000.0, 1030.0, 1061.0):
+        statusline.report_usage(REPORT, ENV, now=now, spawn=spawn)
+    assert len(children) == 2
+
+
+def test_report_usage_hands_the_job_to_the_child_and_does_not_wait(spawned):
+    children, spawn = spawned
+    env = {**ENV, "CLAUDE_BRIDGE_TOKEN": "tok"}
+    statusline.report_usage(REPORT, env, now=1000.0, spawn=spawn)
+    argv, _options, stdin = children[0]
+    assert argv[-1] == statusline.SEND_FLAG
+    assert stdin.closed
+    assert statusline.decode_job(stdin.data) == {
+        "base_url": "http://bridge", "token": "tok", "participant": "w1", "report": REPORT,
+    }
 
 
 @pytest.mark.parametrize(
@@ -146,9 +168,74 @@ def test_report_usage_throttles_by_the_stamp_file(sent):
         (REPORT, {"CLAUDE_BRIDGE_PARTICIPANT": "w1"}),
     ],
 )
-def test_report_usage_sends_nothing_without_data_or_config(sent, report, env):
-    statusline.report_usage(report, env, now=1000.0)
-    assert sent == []
+def test_report_usage_spawns_nothing_without_data_or_config(spawned, report, env):
+    children, spawn = spawned
+    statusline.report_usage(report, env, now=1000.0, spawn=spawn)
+    assert children == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [(["s.py"], False), (["s.py", "--send"], True), (["s.py", "--send", "x"], False)],
+)
+def test_is_send_mode(argv, expected):
+    assert statusline.is_send_mode(argv) is expected
+
+
+def test_spawn_arguments_detach_the_child_on_posix():
+    argv, options = statusline.spawn_arguments(windows=False)
+    assert argv == [sys.executable, str(SCRIPT), "--send"]
+    assert options == {
+        "stdin": subprocess.PIPE,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "start_new_session": True,
+    }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows only")
+def test_spawn_arguments_detach_the_child_on_windows():
+    _argv, options = statusline.spawn_arguments(windows=True)
+    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    assert options["creationflags"] == flags
+    assert "start_new_session" not in options
+
+
+def test_job_round_trips():
+    job = statusline.encode_job("http://b", "tok", "w/1", REPORT)
+    assert statusline.decode_job(job) == {
+        "base_url": "http://b", "token": "tok", "participant": "w/1", "report": REPORT,
+    }
+
+
+@pytest.fixture
+def opened(monkeypatch):
+    requests = []
+
+    class _Opener:
+        def open(self, request, timeout):
+            requests.append((request, timeout))
+            return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(statusline, "OPENER", _Opener())
+    monkeypatch.setattr(statusline, "arm_deadline", lambda seconds: requests.append(seconds))
+    return requests
+
+
+def test_send_child_arms_the_deadline_then_posts_the_job(opened, monkeypatch):
+    job = statusline.encode_job("http://bridge", "tok", "w1", REPORT)
+    monkeypatch.setattr(statusline.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(job)))
+    statusline.main(["s.py", "--send"])
+    deadline, (request, timeout) = opened
+    assert deadline == statusline.SEND_DEADLINE_SECONDS
+    assert request.full_url == "http://bridge/api/participants/w1/usage"
+    assert timeout == statusline.TIMEOUT_SECONDS
+
+
+def test_send_child_never_raises_on_a_bad_job(opened, monkeypatch):
+    monkeypatch.setattr(statusline.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(b"junk")))
+    statusline.main(["s.py", "--send"])
+    assert opened == [statusline.SEND_DEADLINE_SECONDS]
 
 
 def test_main_never_raises_and_prints_a_line(monkeypatch, capsys):
@@ -157,7 +244,7 @@ def test_main_never_raises_and_prints_a_line(monkeypatch, capsys):
 
     monkeypatch.setattr(statusline.sys, "stdin", io.StringIO("not json"))
     monkeypatch.setattr(statusline, "report_usage", bridge_down)
-    statusline.main()
+    statusline.main(["s.py"])
     assert capsys.readouterr().out.strip() == "-"
 
 

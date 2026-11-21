@@ -340,8 +340,8 @@ clients share one bearer token: treat the list as a presence hint, not identity.
 `scripts/claude-statusline-usage.py` is a Claude Code `statusLine` command
 (stdlib only, Python 3.9+). It prints a short line such as `5h 42% | wk 17%`
 and posts the five-hour and weekly rate-limit windows to the bridge, at most
-once a minute. The dashboard then shows them per participant. Claude Code sends
-`rate_limits` only to Pro, Max and Ultra subscribers and only after the first
+once a minute, from a detached child process that exits within 3 seconds.
+The dashboard then shows them per participant. Claude Code sends `rate_limits` only to Pro, Max and Ultra subscribers and only after the first
 API response; without it the script prints `-` and sends nothing.
 
 Copy the script to a stable path and add it to `~/.claude/settings.json`:

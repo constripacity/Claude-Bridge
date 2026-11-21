@@ -1,4 +1,4 @@
-"""The v1.3.0 ``tasks`` table, used to prove in-place migrations."""
+"""Older table layouts, used to prove in-place migrations."""
 
 from __future__ import annotations
 
@@ -47,6 +47,33 @@ def create_v130_database(path: str, *, pending_task_id: str) -> None:
             "'2000-01-01T00:00:00.000000Z', '2000-01-01T00:00:00.000000Z', "
             "'2000-01-01T00:00:00.000000Z')",
             (pending_task_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# The participants table as first shipped, before usage reports.
+PRE_USAGE_PARTICIPANTS_DDL = """
+CREATE TABLE participants (
+    name            TEXT PRIMARY KEY,
+    last_seen       TEXT NOT NULL,
+    current_channel TEXT,
+    current_task_id TEXT
+)
+"""
+
+
+def create_pre_usage_database(path: str, *, participant: str) -> None:
+    """Write a v1.3.0 database plus a pre-usage participants table with one row."""
+    create_v130_database(path, pending_task_id="tsk_legacy")
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(PRE_USAGE_PARTICIPANTS_DDL)
+        conn.execute(
+            "INSERT INTO participants (name, last_seen) "
+            "VALUES (?, '2000-01-01T00:00:00.000000Z')",
+            (participant,),
         )
         conn.commit()
     finally:

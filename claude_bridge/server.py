@@ -75,6 +75,7 @@ from .streamable_http import (
 from .participants import (
     ParticipantStore,
     ensure_participants_schema,
+    parse_usage_report,
     participant_to_dict,
 )
 from .taskqueue import (
@@ -105,6 +106,7 @@ from .validation import (
     validate_idempotency_key,
     validate_non_negative_int,
     validate_raw_content,
+    validate_participant_name,
     validate_sender,
 )
 
@@ -2740,6 +2742,29 @@ async def api_ack(request: Request) -> JSONResponse:
     })
 
 
+async def api_participant_usage(request: Request) -> JSONResponse:
+    """Store a participant's latest Claude usage report (rate-limit windows)."""
+    try:
+        body = await request.json()
+    except (ValueError, TypeError, RecursionError) as exc:
+        return _invalid_json_response(exc)
+    try:
+        name = validate_participant_name(request.path_params["name"])
+        report = parse_usage_report(body)
+        reported_at = await _write_transaction(
+            lambda: participant_store().report_usage(name, report)
+        )
+    except BridgeBusyError:
+        return JSONResponse(
+            {"error": "bridge database is busy; retry the operation"},
+            status_code=503,
+            headers={"Retry-After": "1"},
+        )
+    except BridgeValidationError as exc:
+        return JSONResponse({"error": str(exc), **exc.as_dict()}, status_code=400)
+    return JSONResponse({"name": name, "usage_reported_at": reported_at})
+
+
 def _request_is_https(scheme: str, headers) -> bool:
     """True when the request reached the edge over HTTPS — either this process
     terminates TLS (``scheme == 'https'``) or a TLS-terminating reverse proxy
@@ -3064,6 +3089,11 @@ _routes = [
     Route("/api/clear", endpoint=api_clear, methods=["POST"]),
     Route("/api/session", endpoint=api_session, methods=["GET", "POST", "DELETE"]),
     Route("/api/audit", endpoint=api_audit),
+    Route(
+        "/api/participants/{name}/usage",
+        endpoint=api_participant_usage,
+        methods=["POST"],
+    ),
     Route("/events/channel/{channel:path}", endpoint=sse_channel),
     Route("/mcp", endpoint=mcp_http),
     Route("/sse", endpoint=handle_sse),
@@ -3129,6 +3159,7 @@ app = Starlette(
                 "/api/send",
                 "/api/ack",
                 "/api/clear",
+                "/api/participants/",
                 "/messages/",
                 "/mcp",
             ),

@@ -104,6 +104,13 @@ def validate_sender(value: Any, limits: ValidationLimits = DEFAULT_LIMITS) -> st
     return _validate_identity(value, "sender", limits.max_sender_chars)
 
 
+def validate_participant_name(
+    value: Any, limits: ValidationLimits = DEFAULT_LIMITS
+) -> str:
+    # A participant is a sender or a consumer; both share one length bound.
+    return _validate_identity(value, "name", limits.max_sender_chars)
+
+
 def validate_consumer(value: Any, limits: ValidationLimits = DEFAULT_LIMITS) -> str:
     return _validate_identity(value, "consumer_id", limits.max_consumer_chars)
 
@@ -343,6 +350,7 @@ __all__ = [
     "validate_non_negative_int",
     "validate_raw_content",
     "validate_reference",
+    "validate_participant_name",
     "validate_sender",
     "validate_title",
     "validate_sha256",

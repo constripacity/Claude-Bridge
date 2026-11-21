@@ -9,13 +9,17 @@ import pytest
 from starlette.testclient import TestClient
 
 import claude_bridge.server as bridge
-from claude_bridge.participants import presence
+from claude_bridge.participants import USAGE_STALE_AFTER, presence
 
 NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def seen(delta: timedelta) -> str:
     return (NOW - delta).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def parse_z(stamp: str) -> datetime:
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
 
 
 @pytest.mark.parametrize(
@@ -99,6 +103,12 @@ def test_state_shows_the_latest_usage_report(client):
     }
     assert usage["weekly"] is None
     assert usage["reported_at"].endswith("Z")
+
+
+def test_usage_stale_at_is_the_report_time_plus_the_stale_threshold(client):
+    client.post("/api/participants/w2/usage", json={"weekly": {"used_pct": 5}})
+    usage = state_participants(client)["w2"]["usage"]
+    assert parse_z(usage["stale_at"]) - parse_z(usage["reported_at"]) == USAGE_STALE_AFTER
 
 
 def test_state_participants_use_one_query(client):

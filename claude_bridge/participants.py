@@ -65,6 +65,8 @@ def _parse_timestamp(value: str) -> datetime:
 
 ONLINE_WITHIN = timedelta(minutes=10)
 IDLE_WITHIN = timedelta(hours=24)
+# A usage report older than this is stale; clients read the cutoff as usage.stale_at.
+USAGE_STALE_AFTER = timedelta(minutes=15)
 
 
 def presence(last_seen: str, now: datetime, *, has_open_work: bool = False) -> str:
@@ -366,12 +368,13 @@ def overview_to_dict(overview: ParticipantOverview, now: datetime) -> dict:
 
 
 def _usage_to_dict(usage: UsageReport | None, reported_at: str | None) -> dict | None:
-    if usage is None:
+    if usage is None or reported_at is None:
         return None
     return {
         "session": _optional_asdict(usage.session),
         "weekly": _optional_asdict(usage.weekly),
         "reported_at": reported_at,
+        "stale_at": utc_timestamp(_parse_timestamp(reported_at) + USAGE_STALE_AFTER),
     }
 
 
@@ -386,6 +389,7 @@ __all__ = [
     "Participant",
     "ParticipantOverview",
     "ParticipantStore",
+    "USAGE_STALE_AFTER",
     "UsageReport",
     "UsageWindow",
     "ensure_participants_schema",

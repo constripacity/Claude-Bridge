@@ -424,7 +424,10 @@ Core HTTP endpoints:
 `participants` in `/api/state` lists the newest 100 participants with
 `presence` (`online` when seen in the last 10 minutes, `idle` in the last 24
 hours, else `offline`, by server time), `current_task` (`id`, `title`,
-`claimed_since`) or `null`, and `usage` or `null`. The usage endpoint takes
+`claimed_since`) or `null`, and `usage` or `null`. `usage.stale_at` is
+`reported_at` plus 15 minutes; after it the report is stale.
+
+The usage endpoint takes
 `{"session": {"used_pct": 42, "resets_at": 1767225600}, "weekly": {...}}`:
 each window is optional, `used_pct` is 0..100 and `resets_at` is unix seconds
 or ISO-8601 with an offset; any other key is a 400. A report replaces the one

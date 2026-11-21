@@ -182,7 +182,6 @@ const BridgeMark = ({ size = 24, color = 'var(--blue)' }) => (
 const PRESENCE_COLORS = {
   online: 'var(--green)', idle: 'var(--amber)', offline: 'var(--text-faint)',
 };
-const USAGE_STALE_MS = 15 * 60 * 1000;
 
 function fmtSpan(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -197,7 +196,8 @@ function fmtSpan(ms) {
 const ageMs = (iso, nowMs) => nowMs - Date.parse(iso);
 const fmtAgo = (iso, nowMs) => (iso ? `${fmtSpan(ageMs(iso, nowMs))} ago` : '—');
 const fmtResetIn = (iso, nowMs) => (iso ? `resets in ${fmtSpan(-ageMs(iso, nowMs))}` : '');
-const usageIsStale = (usage, nowMs) => ageMs(usage.reported_at, nowMs) > USAGE_STALE_MS;
+// The server owns the stale threshold and sends the cutoff.
+const usageIsStale = (usage, nowMs) => nowMs > Date.parse(usage.stale_at);
 
 const PresenceDot = ({ presence, size = 7 }) => (
   <span title={presence} style={{

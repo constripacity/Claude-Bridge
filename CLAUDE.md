@@ -68,6 +68,9 @@ Channel names and recipients route messages; they are not access-control rules.
 | `bridge_complete` | Finish a claimed task, fenced by its lease token |
 | `bridge_fail` | Fail a claimed task; requeue with backoff or dead-letter |
 | `bridge_tasks` | Inspect a channel's queue counts and tasks |
+| `bridge_task_note` | Attach a note (e.g. a correction) to a pending or claimed task |
+| `bridge_task_notes` | Read new notes on a task you hold, fenced by its lease token |
+| `bridge_participants` | See who is active and which task each participant holds |
 
 Prefer `bridge_wait` while idle. Use `bridge_receive` for a bounded startup
 snapshot or explicit resynchronization.
@@ -229,6 +232,9 @@ one worker. Use the queue when a fleet must share work without double-processing
   task that was already reclaimed.
 - Pick a `lease_seconds` per task class: long enough to finish, short enough to
   recover quickly. `bridge_tasks(channel)` shows queue depth by status.
+- **Notes** — read `task.notes` from the claim before you start. On long work,
+  call `bridge_task_notes` between steps, and read `unread_notes` in the
+  complete/fail result: a note can change what the task asks for.
 
 ## Recovery
 

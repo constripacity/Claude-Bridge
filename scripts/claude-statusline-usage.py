@@ -173,8 +173,10 @@ def start_send_child(job: bytes, spawn: Callable) -> None:
     """Hand the job to a detached child; never wait for it."""
     argv, options = spawn_arguments(os.name == "nt")
     child = spawn(argv, **options)
-    child.stdin.write(job)
-    child.stdin.close()
+    try:
+        child.stdin.write(job)  # Under 1 KB, so the pipe takes it without a wait.
+    finally:
+        child.stdin.close()
 
 
 def send_job(job: dict) -> None:

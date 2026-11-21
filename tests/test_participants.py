@@ -177,6 +177,18 @@ async def test_sweep_prunes_idle_participants_without_message_retention(
 
 
 @pytest.mark.asyncio
+async def test_sweep_keeps_a_participant_waiting_on_its_enqueued_task(
+    fresh_db, monkeypatch
+):
+    await call("bridge_send", {"channel": "chat", "sender": "lead", "content": "x"})
+    await call("bridge_enqueue", {"channel": "jobs", "content": "a", "enqueued_by": "lead"})
+    monkeypatch.setattr(bridge, "PARTICIPANT_IDLE_DAYS", 7)
+    cutoff_in_the_future(monkeypatch)
+    await bridge.housekeeping_sweep_once()
+    assert "lead" in await participants()
+
+
+@pytest.mark.asyncio
 async def test_participant_idle_days_zero_keeps_idle_participants(fresh_db, monkeypatch):
     await call("bridge_send", {"channel": "chat", "sender": "idle", "content": "x"})
     monkeypatch.setattr(bridge, "RETENTION_DAYS", 1)

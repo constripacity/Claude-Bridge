@@ -127,3 +127,66 @@ def test_claimed_since_stays_while_the_worker_reads_notes(client):
     )
     claimed_since = state_participants(client)["w1"]["current_task"]["claimed_since"]
     assert claimed_since == task["updated_at"]
+
+
+@pytest.mark.parametrize(
+    ("age", "expected"),
+    [
+        (timedelta(hours=3), "online"),
+        (timedelta(hours=24), "online"),
+        (timedelta(hours=24, seconds=1), "offline"),
+    ],
+)
+def test_open_work_keeps_presence_online_within_a_day(age, expected):
+    assert presence(seen(age), NOW, has_open_work=True) == expected
+
+
+def last_seen_hours_ago(name, hours):
+    stamp = datetime.now(timezone.utc) - timedelta(hours=hours)
+    bridge.db().execute(
+        "UPDATE participants SET last_seen = ? WHERE name = ?",
+        (stamp.isoformat().replace("+00:00", "Z"), name),
+    )
+    bridge.db().commit()
+
+
+def test_waiting_enqueuer_is_online_with_its_open_task_count(client):
+    call("bridge_send", {"channel": "chat", "sender": "lead", "content": "delegating"})
+    for content in ("a", "b"):
+        call("bridge_enqueue", {"channel": "jobs", "content": content, "enqueued_by": "lead"})
+    call("bridge_claim", {"channel": "jobs", "consumer": "w1"})
+    last_seen_hours_ago("lead", 2)
+
+    lead = state_participants(client)["lead"]
+    assert lead["presence"] == "online"
+    assert lead["current_task"] is None
+    assert lead["open_tasks"] == 2
+
+
+def test_enqueuer_is_idle_again_once_its_tasks_are_completed_or_dead(client):
+    call("bridge_send", {"channel": "chat", "sender": "lead", "content": "delegating"})
+    for verb in ("bridge_complete", "bridge_fail"):
+        call(
+            "bridge_enqueue",
+            {"channel": "jobs", "content": verb, "enqueued_by": "lead", "max_attempts": 1},
+        )
+        task = call("bridge_claim", {"channel": "jobs", "consumer": "w1"})["task"]
+        call(
+            verb,
+            {"channel": "jobs", "task_id": task["task_id"], "lease_token": task["lease_token"]},
+        )
+    last_seen_hours_ago("lead", 2)
+
+    lead = state_participants(client)["lead"]
+    assert lead["presence"] == "idle"
+    assert lead["open_tasks"] == 0
+
+
+def test_lease_holder_is_online_while_its_lease_is_live(client):
+    call("bridge_enqueue", {"channel": "jobs", "content": "long", "enqueued_by": "lead"})
+    call("bridge_claim", {"channel": "jobs", "consumer": "w1", "lease_seconds": 3600})
+    last_seen_hours_ago("w1", 2)
+
+    w1 = state_participants(client)["w1"]
+    assert w1["presence"] == "online"
+    assert w1["open_tasks"] == 0

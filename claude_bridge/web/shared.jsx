@@ -261,7 +261,12 @@ function UsageBars({ usage, nowMs, compact }) {
 function ParticipantActivity({ p, nowMs }) {
   const task = p.current_task;
   if (!task) {
-    return <span style={{ color: 'var(--text-faint)' }}>idle</span>;
+    const waiting = p.open_tasks > 0;
+    return (
+      <span style={{ color: waiting ? 'var(--text-mid)' : 'var(--text-faint)' }}>
+        {waiting ? `waiting on ${p.open_tasks} task${p.open_tasks === 1 ? '' : 's'}` : 'idle'}
+      </span>
+    );
   }
   return (
     <span style={{

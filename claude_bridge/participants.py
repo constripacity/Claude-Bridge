@@ -51,6 +51,8 @@ _LIVE_LEASE = (
     "FROM tasks WHERE tasks.lease_owner = participants.name "
     "AND tasks.status = 'claimed' AND tasks.lease_expires_at > :now "
 )
+# Statuses of a task that is not finished yet (completed, failed and dead are).
+_OPEN_STATUSES = "('pending', 'claimed')"
 
 
 def _now_iso() -> str:
@@ -65,10 +67,13 @@ ONLINE_WITHIN = timedelta(minutes=10)
 IDLE_WITHIN = timedelta(hours=24)
 
 
-def presence(last_seen: str, now: datetime) -> str:
-    """'online', 'idle' or 'offline' by the time since the participant was seen."""
+def presence(last_seen: str, now: datetime, *, has_open_work: bool = False) -> str:
+    """'online', 'idle' or 'offline' by the time since the participant was seen.
+
+    Open work keeps it online, but only within IDLE_WITHIN, so a crashed session ends offline.
+    """
     age = now - _parse_timestamp(last_seen)
-    if age <= ONLINE_WITHIN:
+    if age <= ONLINE_WITHIN or (has_open_work and age <= IDLE_WITHIN):
         return "online"
     if age <= IDLE_WITHIN:
         return "idle"
@@ -193,6 +198,12 @@ class ParticipantOverview:
     current_task: CurrentTask | None
     usage: UsageReport | None
     usage_reported_at: str | None
+    open_tasks: int  # Tasks it enqueued that are not finished yet.
+    held_tasks: int  # Tasks it holds a live lease on.
+
+    @property
+    def has_open_work(self) -> bool:
+        return self.open_tasks > 0 or self.held_tasks > 0
 
 
 def _overview_from_row(row: sqlite3.Row) -> ParticipantOverview:
@@ -217,6 +228,8 @@ def _overview_from_row(row: sqlite3.Row) -> ParticipantOverview:
         current_task=current_task,
         usage=usage,
         usage_reported_at=row["usage_reported_at"],
+        open_tasks=row["open_tasks"],
+        held_tasks=row["held_tasks"],
     )
 
 
@@ -287,9 +300,14 @@ class ParticipantStore:
         )
 
     def prune_idle(self, *, last_seen_before: str) -> int:
-        """Forget participants that hold no task and were not seen since the cutoff."""
+        """Forget participants with no task held or enqueued, not seen since the cutoff.
+
+        A row with open enqueued tasks stays (offline after a day) so stuck work keeps an owner.
+        """
         return self._conn.execute(
-            "DELETE FROM participants WHERE current_task_id IS NULL AND last_seen < ?",
+            "DELETE FROM participants WHERE current_task_id IS NULL AND last_seen < ? "
+            "AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.enqueued_by = participants.name "
+            f"AND tasks.status IN {_OPEN_STATUSES})",
             (last_seen_before,),
         ).rowcount
 
@@ -303,19 +321,26 @@ class ParticipantStore:
         return [Participant(*tuple(row)) for row in rows]
 
     def list_overview(self, *, limit: int, now: datetime) -> list[ParticipantOverview]:
-        """Like list_recent, joined in one query to the task each one holds live."""
+        """Like list_recent, joined in one query to its live task and open task counts."""
         cursor = self._conn.cursor()
         cursor.row_factory = sqlite3.Row  # Named columns, whatever the connection uses.
         rows = cursor.execute(
             "SELECT p.name, p.last_seen, p.current_channel, p.current_task_id, "
             "t.title AS task_title, t.updated_at AS claimed_since, "
             "p.usage_session_pct, p.usage_session_resets_at, "
-            "p.usage_weekly_pct, p.usage_weekly_resets_at, p.usage_reported_at "
+            "p.usage_weekly_pct, p.usage_weekly_resets_at, p.usage_reported_at, "
+            "COALESCE(enqueued.n, 0) AS open_tasks, COALESCE(held.n, 0) AS held_tasks "
             "FROM participants p LEFT JOIN tasks t ON t.id = p.current_task_id "
             "AND t.lease_owner = p.name AND t.status = 'claimed' "
-            "AND t.lease_expires_at > ? "
-            "ORDER BY p.last_seen DESC, p.name LIMIT ?",
-            (utc_timestamp(now), limit),
+            "AND t.lease_expires_at > :now "
+            "LEFT JOIN (SELECT enqueued_by AS owner, COUNT(*) AS n FROM tasks "
+            f"WHERE status IN {_OPEN_STATUSES} GROUP BY enqueued_by) enqueued "
+            "ON enqueued.owner = p.name "
+            "LEFT JOIN (SELECT lease_owner AS owner, COUNT(*) AS n FROM tasks "
+            "WHERE status = 'claimed' AND lease_expires_at > :now GROUP BY lease_owner) held "
+            "ON held.owner = p.name "
+            "ORDER BY p.last_seen DESC, p.name LIMIT :limit",
+            {"now": utc_timestamp(now), "limit": limit},
         ).fetchall()
         return [_overview_from_row(row) for row in rows]
 
@@ -330,9 +355,12 @@ def overview_to_dict(overview: ParticipantOverview, now: datetime) -> dict:
     return {
         "name": participant.name,
         "last_seen": participant.last_seen,
-        "presence": presence(participant.last_seen, now),
+        "presence": presence(
+            participant.last_seen, now, has_open_work=overview.has_open_work
+        ),
         "current_channel": participant.current_channel,
         "current_task": _optional_asdict(overview.current_task),
+        "open_tasks": overview.open_tasks,
         "usage": _usage_to_dict(overview.usage, overview.usage_reported_at),
     }
 

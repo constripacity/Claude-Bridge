@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .migrations import add_missing_columns
-from .timestamps import utc_timestamp
+from .timestamps import parse_timestamp, utc_timestamp
 from .validation import BridgeValidationError
 
 # Usage columns added after the participants table first shipped.
@@ -59,10 +59,6 @@ def _now_iso() -> str:
     return utc_timestamp(datetime.now(timezone.utc))
 
 
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
 ONLINE_WITHIN = timedelta(minutes=10)
 IDLE_WITHIN = timedelta(hours=24)
 # A usage report older than this is stale; clients read the cutoff as usage.stale_at.
@@ -74,7 +70,7 @@ def presence(last_seen: str, now: datetime, *, has_open_work: bool = False) -> s
 
     Open work keeps it online, but only within IDLE_WITHIN, so a crashed session ends offline.
     """
-    age = now - _parse_timestamp(last_seen)
+    age = now - parse_timestamp(last_seen)
     if age <= ONLINE_WITHIN or (has_open_work and age <= IDLE_WITHIN):
         return "online"
     if age <= IDLE_WITHIN:
@@ -171,7 +167,7 @@ def _invalid_time(field: str) -> BridgeValidationError:
 
 def _instant_from(value: float | str) -> datetime:
     if isinstance(value, str):
-        return _parse_timestamp(value)
+        return parse_timestamp(value)
     return datetime.fromtimestamp(value, timezone.utc)
 
 
@@ -374,7 +370,7 @@ def _usage_to_dict(usage: UsageReport | None, reported_at: str | None) -> dict |
         "session": _optional_asdict(usage.session),
         "weekly": _optional_asdict(usage.weekly),
         "reported_at": reported_at,
-        "stale_at": utc_timestamp(_parse_timestamp(reported_at) + USAGE_STALE_AFTER),
+        "stale_at": utc_timestamp(parse_timestamp(reported_at) + USAGE_STALE_AFTER),
     }
 
 

@@ -436,6 +436,7 @@ def test_deep_legacy_json_cannot_poison_reads(fresh_db):
     assert listing.json()["messages"][0]["id"] == sent.json()["id"]
     assert detail.status_code == 200
     assert detail.json()["encoding"] == "legacy_text"
+    assert detail.json()["content_parsed"] is None
 
 
 def test_deep_request_json_returns_400(fresh_db):

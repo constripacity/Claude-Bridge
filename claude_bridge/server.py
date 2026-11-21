@@ -101,6 +101,7 @@ from .validation import (
     DEFAULT_LIMITS,
     BridgeValidationError,
     canonical_json,
+    loads_bounded_json,
     normalize_limit,
     validate_channel,
     validate_consumer,
@@ -451,9 +452,9 @@ def _is_json_str(s: str) -> bool:
     if not s or s[0] not in "{[":
         return False
     try:
-        json.loads(s)
+        loads_bounded_json(s)
         return True
-    except (ValueError, TypeError, RecursionError):
+    except (ValueError, TypeError):
         return False
 
 
@@ -2565,7 +2566,7 @@ async def api_message_detail(request: Request) -> JSONResponse:
     parsed = None
     if is_json:
         try:
-            parsed = json.loads(content)
+            parsed = loads_bounded_json(content)
         except (ValueError, TypeError):
             parsed = None
     protocol_message = parse_message_content(content)

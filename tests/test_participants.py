@@ -155,19 +155,48 @@ async def test_rejected_complete_leaves_participants_unchanged(fresh_db):
     assert await participants() == before
 
 
+def cutoff_in_the_future(monkeypatch):
+    """Make every retention cutoff lie ahead, so all idle rows count as old."""
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+    stamp = future.isoformat().replace("+00:00", "Z")
+    monkeypatch.setattr(bridge, "_retention_cutoff_iso", lambda days, now=None: stamp)
+
+
 @pytest.mark.asyncio
-async def test_sweep_prunes_idle_participants_past_retention(fresh_db, monkeypatch):
+async def test_sweep_prunes_idle_participants_without_message_retention(
+    fresh_db, monkeypatch
+):
     task = await enqueue_and_claim("busy")
     await call("bridge_send", {"channel": "chat", "sender": "idle", "content": "x"})
-    monkeypatch.setattr(bridge, "RETENTION_DAYS", 1)
-    real_now = datetime.now(timezone.utc)
-    monkeypatch.setattr(
-        bridge, "_retention_cutoff_iso",
-        lambda days, now=None: (real_now + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
-    )
+    monkeypatch.setattr(bridge, "RETENTION_DAYS", 0)
+    monkeypatch.setattr(bridge, "PARTICIPANT_IDLE_DAYS", 7)
+    cutoff_in_the_future(monkeypatch)
     await bridge.housekeeping_sweep_once()
     seen = await participants()
     assert "idle" not in seen and seen["busy"]["current_task_id"] == task["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_participant_idle_days_zero_keeps_idle_participants(fresh_db, monkeypatch):
+    await call("bridge_send", {"channel": "chat", "sender": "idle", "content": "x"})
+    monkeypatch.setattr(bridge, "RETENTION_DAYS", 1)
+    monkeypatch.setattr(bridge, "PARTICIPANT_IDLE_DAYS", 0)
+    cutoff_in_the_future(monkeypatch)
+    await bridge.housekeeping_sweep_once()
+    assert "idle" in await participants()
+
+
+@pytest.mark.asyncio
+async def test_participants_listing_honours_the_limit(fresh_db):
+    for name in ("a", "b", "c"):
+        await call("bridge_send", {"channel": "chat", "sender": name, "content": "x"})
+    data = await call("bridge_participants", {"limit": 2})
+    assert [p["name"] for p in data["participants"]] == ["c", "b"]
+
+
+def test_participant_idle_days_default_is_seven(monkeypatch):
+    monkeypatch.delenv("CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS", raising=False)
+    assert bridge.Settings.from_env().participant_idle_days == 7
 
 
 @pytest.mark.asyncio

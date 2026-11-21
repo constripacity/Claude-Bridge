@@ -89,10 +89,12 @@ class ParticipantStore:
             (last_seen_before,),
         ).rowcount
 
-    def list_all(self) -> list[Participant]:
+    def list_recent(self, *, limit: int) -> list[Participant]:
+        """The `limit` participants seen most recently, newest first."""
         rows = self._conn.execute(
             "SELECT name, last_seen, current_channel, current_task_id "
-            "FROM participants ORDER BY last_seen DESC, name"
+            "FROM participants ORDER BY last_seen DESC, name LIMIT ?",
+            (limit,),
         ).fetchall()
         return [Participant(*tuple(row)) for row in rows]
 

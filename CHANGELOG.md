@@ -21,7 +21,9 @@ versioning where the Python packaging format allows.
 - **Participants.** `bridge_participants` lists every sender and consumer with
   `last_seen` and the newest task it holds a live lease on. Names are
   self-declared (one shared bearer token), so this is a presence hint, not an
-  identity. Idle participants are pruned with the message retention window.
+  identity. It returns the newest 100 by default (`limit`, max 500). Participants
+  that hold no task are pruned after `CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS` (default
+  7, `0` keeps them), independent of message retention.
 - Schema: new `task_notes` and `participants` tables and the `tasks` columns
   `worked_by` and `notes_read_seq`. An older database upgrades in place at
   startup; the task-queue schema version stays 1, so a 1.3.0 server can still

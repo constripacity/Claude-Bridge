@@ -147,6 +147,8 @@ SSE_REPLAY_LIMIT = SETTINGS.sse_replay_limit
 # `RETENTION_DAYS` days, every `RETENTION_SWEEP_SECONDS`. Opt-in, with a loud
 # startup banner, because it's the first feature that deletes historical state.
 RETENTION_DAYS = SETTINGS.retention_days
+# Participants that hold no task are forgotten after this many idle days; 0 keeps them.
+PARTICIPANT_IDLE_DAYS = SETTINGS.participant_idle_days
 RETENTION_SWEEP_SECONDS = SETTINGS.retention_sweep_seconds
 
 # Audit log. Off by default. When on, auth failures, oversize-body rejects,
@@ -1231,9 +1233,13 @@ async def housekeeping_sweep_once() -> tuple[int, int, int, int, int]:
             task_sweep = task_store().requeue_expired(limit=10_000)
             participant_store().reconcile_current_tasks()
             if RETENTION_DAYS > 0:
-                retention_cutoff = _retention_cutoff_iso(RETENTION_DAYS)
-                task_store().prune_terminal(older_than_iso=retention_cutoff, limit=10_000)
-                participant_store().prune_idle(last_seen_before=retention_cutoff)
+                task_store().prune_terminal(
+                    older_than_iso=_retention_cutoff_iso(RETENTION_DAYS), limit=10_000
+                )
+            if PARTICIPANT_IDLE_DAYS > 0:
+                participant_store().prune_idle(
+                    last_seen_before=_retention_cutoff_iso(PARTICIPANT_IDLE_DAYS)
+                )
             conn.commit()
         except BaseException:
             if conn.in_transaction:
@@ -1751,11 +1757,19 @@ async def list_tools() -> list[Tool]:
             description=(
                 "List bridge participants (senders and task consumers): when each "
                 "was last seen and the newest task it holds a live lease on, with "
-                "that task's channel. Names are self-declared. Read-only."
+                "that task's channel. Newest first, up to limit. Names are "
+                "self-declared. Read-only."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 500,
+                        "default": 100,
+                    },
+                },
                 "additionalProperties": False,
             },
             outputSchema=object_output,
@@ -2216,7 +2230,9 @@ async def dispatch_tool(
 
     # ── bridge_participants ──────────────────────────────────────────────────
     elif name == "bridge_participants":
-        participants = participant_store().list_all()
+        participants = participant_store().list_recent(
+            limit=normalize_limit(arguments.get("limit"), default=100, maximum=500)
+        )
         lines = [f"{len(participants)} participant(s)"]
         for p in participants:
             holding = (

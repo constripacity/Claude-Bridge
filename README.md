@@ -321,8 +321,9 @@ task rejects notes (`not_active`). Because every claim returns all notes, they a
 bounded: 16 KiB per note (`content`/`too_large`), 64 KiB in total per task
 (`content`/`task_notes_too_large`) and 100 notes per task (`task_id`/`too_many_notes`).
 
-`bridge_participants` lists every sender and consumer with `last_seen` and the
-newest task it holds a live lease on. Names are self-declared, because all
+`bridge_participants` lists senders and consumers, newest first (`limit`, default
+100, max 500), with `last_seen` and the newest task each holds a live lease on.
+Names are self-declared, because all
 clients share one bearer token: treat the list as a presence hint, not identity.
 
 ## Channels
@@ -425,6 +426,7 @@ session, and a server restart invalidates all in-memory dashboard sessions.
 | `CLAUDE_BRIDGE_SESSION_TTL_SECONDS` | `28800` | Opaque dashboard-session lifetime |
 | `CLAUDE_BRIDGE_EVENT_POLL_MS` | `500` | Cross-process outbox polling interval |
 | `CLAUDE_BRIDGE_EVENT_RETENTION_DAYS` | `7` | Retain delivered outbox records |
+| `CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS` | `7` | Forget participants that hold no task after this many idle days; `0` keeps them |
 | `--no-dashboard` | off | Do not mount browser assets |
 | `CLAUDE_BRIDGE_MAX_REQUEST_BYTES` | `262144` | Maximum HTTP request body |
 | `CLAUDE_BRIDGE_MAX_MESSAGE_BYTES` | `131072` | Maximum encoded message |

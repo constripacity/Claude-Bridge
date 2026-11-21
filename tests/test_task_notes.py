@@ -396,3 +396,19 @@ async def test_task_notes_text_states_the_count_once(fresh_db):
     assert first_line == f"Task {task_id}" and content[0].text.count("(2)") == 1
     empty, _data = await bridge.dispatch_tool("bridge_task_notes", lease(task), structured=True)
     assert empty[0].text == f"No new notes on task {task_id}"
+
+
+@pytest.mark.asyncio
+async def test_replace_keeps_the_notes_of_the_task(fresh_db):
+    enq = await call(
+        "bridge_enqueue", {"channel": "jobs", "content": "v1", "enqueued_by": "lead"}
+    )
+    await note(enq["task_id"], "use branch b")
+    await call(
+        "bridge_replace",
+        {"channel": "jobs", "task_id": enq["task_id"], "sender": "lead", "content": "v2"},
+    )
+
+    task = await claim()
+    assert task["payload"] == "v2" and task["worked_by"] == "w1"
+    assert [n["content"] for n in task["notes"]] == ["use branch b"]

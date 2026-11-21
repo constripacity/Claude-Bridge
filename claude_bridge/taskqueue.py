@@ -85,6 +85,25 @@ class TaskNotActiveError(TaskQueueError):
         super().__init__(f"task {task_id!r} is no longer pending or claimed")
 
 
+class TaskPermissionError(TaskQueueError):
+    """The caller is not the task's original enqueuer."""
+
+    def __init__(self, channel: str, task_id: str) -> None:
+        self.channel = channel
+        self.task_id = task_id
+        super().__init__(f"only the original enqueuer may change task {task_id!r}")
+
+
+class TaskStateError(TaskQueueError):
+    """The task's current status does not permit the requested change."""
+
+    def __init__(self, channel: str, task_id: str, status: TaskStatus) -> None:
+        self.channel = channel
+        self.task_id = task_id
+        self.status = status
+        super().__init__(f"task {task_id!r} is {status.value}, not pending")
+
+
 class TaskStatus(str, Enum):
     PENDING = "pending"
     CLAIMED = "claimed"
@@ -678,6 +697,59 @@ class TaskStore:
                 )
             return new_notes
 
+    def replace(
+        self,
+        *,
+        channel: str,
+        task_id: str,
+        sender: str,
+        payload: str,
+        priority: int | None = None,
+        delay_seconds: int | None = None,
+        now: datetime | None = None,
+    ) -> Task:
+        """Swap a pending task's payload in place; id and queue position stay.
+
+        Only the original enqueuer may replace. Sender names are self-asserted.
+        """
+        channel = validate_channel(channel)
+        task_id = validate_reference(task_id, "task_id")
+        sender = validate_reference(sender, "sender")
+        payload = _require_text(payload, "payload", DEFAULT_LIMITS.max_message_bytes)
+        if priority is not None:
+            priority = validate_non_negative_int(priority, "priority", maximum=_MAX_COUNT)
+        instant = _as_utc(now or _utc_now())
+        available_at = None
+        if delay_seconds is not None:
+            delay_seconds = validate_non_negative_int(
+                delay_seconds, "delay_seconds", maximum=_MAX_TASK_SECONDS
+            )
+            available_at = _timestamp(instant + timedelta(seconds=delay_seconds))
+
+        with self._lock, _savepoint(self.conn):
+            current = self._require_replaceable(channel, task_id, sender)
+            # A replaced task is new work, so earlier attempts and errors no longer apply.
+            self.conn.execute(
+                "UPDATE tasks SET payload = ?, priority = COALESCE(?, priority), "
+                "available_at = COALESCE(?, available_at), attempts = 0, "
+                "last_error = NULL, updated_at = ? WHERE seq = ?",
+                (payload, priority, available_at, _timestamp(instant), current.seq),
+            )
+            row = self.conn.execute(
+                _TASK_SELECT + "WHERE seq = ?", (current.seq,)
+            ).fetchone()
+            return _task_from_row(row)
+
+    def _require_replaceable(self, channel: str, task_id: str, sender: str) -> Task:
+        current = self._get(channel, task_id)
+        if current is None:
+            raise TaskNotFoundError(channel, task_id)
+        if current.enqueued_by != sender:
+            raise TaskPermissionError(channel, task_id)
+        if current.status is not TaskStatus.PENDING:
+            raise TaskStateError(channel, task_id, current.status)
+        return current
+
     def _raise_fence_error(self, channel: str, task_id: str) -> None:
         """Distinguish an unknown task from a lost lease for a helpful error."""
         if self._get(channel, task_id) is None:
@@ -831,7 +903,9 @@ __all__ = [
     "TaskNote",
     "TaskNotActiveError",
     "TaskNotFoundError",
+    "TaskPermissionError",
     "TaskQueueError",
+    "TaskStateError",
     "TaskStatus",
     "TaskStore",
     "TaskWithNotes",

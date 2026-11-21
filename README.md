@@ -219,6 +219,7 @@ before making support claims.
 | `bridge_task_note` | Attach a note to a pending or claimed task for its worker |
 | `bridge_task_notes` | Read a claimed task's new notes, fenced by its `lease_token` |
 | `bridge_participants` | List participants: last seen and the task each one holds |
+| `bridge_replace` | Replace a pending task's payload in place (original enqueuer only; resets `attempts`, needs `enqueued_by`) |
 
 Tool results include structured data for clients that support MCP structured
 content and a readable text representation for compatibility.
@@ -306,6 +307,8 @@ If a worker crashes and never resolves its task, the lease expires and the task
 is requeued automatically — or dead-lettered once `max_attempts` is exhausted.
 This is **at-least-once** delivery, so make task handlers idempotent.
 `bridge_tasks(channel="builds")` shows the queue's per-status counts.
+Until a worker claims it, the enqueuer can swap a task's payload in place with
+`bridge_replace(channel, task_id, sender=<enqueued_by>, payload=…)`.
 
 An orchestrator can correct a task after it was enqueued, without a new task:
 

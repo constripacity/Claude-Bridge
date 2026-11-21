@@ -32,6 +32,10 @@ versioning where the Python packaging format allows.
   behind (the sweep deletes them after an upgrade again), and a task it claims
   keeps the note cursor of the lease before, so `bridge_task_notes` can skip notes
   up to that cursor until the next claim, which delivers all notes again.
+- `bridge_replace`: the original enqueuer (`sender` equal to `enqueued_by`) can
+  replace a still-pending task's payload, and optionally its `priority` and
+  `delay_seconds`, in place, and resets `attempts`. Claimed or finished tasks and
+  tasks enqueued without `enqueued_by` are rejected.
 
 ## [1.3.0] - 2026-08-23
 

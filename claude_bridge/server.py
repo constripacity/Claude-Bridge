@@ -85,6 +85,8 @@ from .taskqueue import (
     TaskNote,
     TaskNotActiveError,
     TaskNotFoundError,
+    TaskPermissionError,
+    TaskStateError,
     TaskStatus,
     TaskStore,
     TaskWithNotes,
@@ -989,6 +991,16 @@ def _task_errors_as_validation() -> Iterator[None]:
         raise BridgeValidationError(
             "task_id", "not_active", "is no longer pending or claimed"
         ) from exc
+    except TaskPermissionError as exc:
+        raise BridgeValidationError(
+            "sender", "forbidden", "only the original enqueuer may replace a task"
+        ) from exc
+    except TaskStateError as exc:
+        raise BridgeValidationError(
+            "task_id",
+            "not_pending",
+            f"task is {exc.status.value}; only pending tasks can be replaced",
+        ) from exc
 
 
 async def enqueue_task_reliable(
@@ -1168,6 +1180,30 @@ def _notes_text(heading: str, notes: list[TaskNote]) -> str:
 def _indented(text: str) -> str:
     # Continuation lines sit deeper than any output field, so a note cannot fake one.
     return "\n      | ".join(text.splitlines())
+
+
+async def replace_task_reliable(
+    *,
+    channel: str,
+    task_id: str,
+    sender: str,
+    payload: str,
+    priority: int | None = None,
+    delay_seconds: int | None = None,
+):
+    task = await _write_transaction(
+        lambda: task_store().replace(
+            channel=channel,
+            task_id=task_id,
+            sender=sender,
+            payload=payload,
+            priority=priority,
+            delay_seconds=delay_seconds,
+        )
+    )
+    # A new priority or delay can make the task claimable now; wake waiters.
+    await _notify_task_waiters()
+    return task
 
 
 # ── Message retention ────────────────────────────────────────────────────────
@@ -1673,6 +1709,51 @@ async def list_tools() -> list[Tool]:
             ),
         ),
         Tool(
+            name="bridge_replace",
+            description=(
+                "Replace the payload of a pending task in place (same task_id and "
+                "queue position). Only the original enqueuer (sender must equal "
+                "enqueued_by) may replace, and only before a worker claims it. "
+                "Resets attempts; tasks enqueued without enqueued_by cannot be replaced."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "task_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "sender": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "payload": {"description": "Structured JSON task payload"},
+                    "content": {"type": "string", "description": "String task payload"},
+                    "priority": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 2147483647,
+                        "description": "New priority; omit to keep the current one",
+                    },
+                    "delay_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1000000000,
+                        "description": "New delay from now; omit to keep the current one",
+                    },
+                },
+                "required": ["channel", "task_id", "sender"],
+                "oneOf": [
+                    {"required": ["payload"], "not": {"required": ["content"]}},
+                    {"required": ["content"], "not": {"required": ["payload"]}},
+                ],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Replace task",
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
             name="bridge_tasks",
             description=(
                 "Inspect a channel's task queue: per-status counts plus a recent "
@@ -1816,6 +1897,12 @@ def _format_message_rows(channel: str, rows: list[sqlite3.Row]) -> str:
         lines.append(message["content"])
         lines.append("")
     return f"[{channel}] — {len(rows)} message(s)\n" + "\n".join(lines).rstrip()
+
+
+def _task_payload(arguments: dict[str, Any]) -> str:
+    if "payload" in arguments:
+        return canonical_json(arguments["payload"], field="payload")
+    return arguments["content"]
 
 
 async def dispatch_tool(
@@ -2072,13 +2159,9 @@ async def dispatch_tool(
     # ── bridge_enqueue ───────────────────────────────────────────────────────
     elif name == "bridge_enqueue":
         channel = validate_channel(arguments["channel"])
-        if "payload" in arguments:
-            payload = canonical_json(arguments["payload"], field="payload")
-        else:
-            payload = arguments["content"]
         outcome = await enqueue_task_reliable(
             channel=channel,
-            payload=payload,
+            payload=_task_payload(arguments),
             priority=arguments.get("priority", 0),
             max_attempts=arguments.get("max_attempts"),
             delay_seconds=arguments.get("delay_seconds", 0),
@@ -2176,6 +2259,24 @@ async def dispatch_tool(
                 **task_to_dict(task, include_payload=False),
                 "unread_notes": notes_to_dicts(unread),
             },
+            structured=structured,
+        )
+
+    # ── bridge_replace ───────────────────────────────────────────────────────
+    elif name == "bridge_replace":
+        channel = validate_channel(arguments["channel"])
+        with _task_errors_as_validation():
+            task = await replace_task_reliable(
+                channel=channel,
+                task_id=arguments["task_id"],
+                sender=arguments["sender"],
+                payload=_task_payload(arguments),
+                priority=arguments.get("priority"),
+                delay_seconds=arguments.get("delay_seconds"),
+            )
+        return _tool_output(
+            f"✓ Replaced task {task.id} on [{channel}] (status {task.status.value})",
+            task_to_dict(task, include_payload=False),
             structured=structured,
         )
 

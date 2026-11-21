@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import sqlite3
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .migrations import add_missing_columns
@@ -60,6 +60,24 @@ def _timestamp(value: datetime) -> str:
 
 def _now_iso() -> str:
     return _timestamp(datetime.now(timezone.utc))
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+ONLINE_WITHIN = timedelta(minutes=10)
+IDLE_WITHIN = timedelta(hours=24)
+
+
+def presence(last_seen: str, now: datetime) -> str:
+    """'online', 'idle' or 'offline' by the time since the participant was seen."""
+    age = now - _parse_timestamp(last_seen)
+    if age <= ONLINE_WITHIN:
+        return "online"
+    if age <= IDLE_WITHIN:
+        return "idle"
+    return "offline"
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +162,49 @@ def _window_columns(window: UsageWindow | None) -> tuple[float | None, str | Non
     return (None, None) if window is None else (window.used_pct, window.resets_at)
 
 
+def _window_from_columns(
+    used_pct: float | None, resets_at: str | None
+) -> UsageWindow | None:
+    return None if used_pct is None else UsageWindow(used_pct, resets_at)
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentTask:
+    id: str
+    title: str | None
+    claimed_since: str  # A claimed task's updated_at is its claim time.
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantOverview:
+    """A participant with its live task and its latest usage report."""
+
+    participant: Participant
+    current_task: CurrentTask | None
+    usage: UsageReport | None
+    usage_reported_at: str | None
+
+
+def _overview_from_row(row: sqlite3.Row | tuple) -> ParticipantOverview:
+    (name, last_seen, channel, task_id, task_title, claimed_since,
+     session_pct, session_resets, weekly_pct, weekly_resets, reported_at) = tuple(row)
+    current_task = (
+        None if claimed_since is None else CurrentTask(task_id, task_title, claimed_since)
+    )
+    usage = None
+    if reported_at is not None:
+        usage = UsageReport(
+            session=_window_from_columns(session_pct, session_resets),
+            weekly=_window_from_columns(weekly_pct, weekly_resets),
+        )
+    return ParticipantOverview(
+        participant=Participant(name, last_seen, channel, task_id),
+        current_task=current_task,
+        usage=usage,
+        usage_reported_at=reported_at,
+    )
+
+
 class ParticipantStore:
     """Repository for participant presence; callers own the transaction."""
 
@@ -226,17 +287,64 @@ class ParticipantStore:
         ).fetchall()
         return [Participant(*tuple(row)) for row in rows]
 
+    def list_overview(self, *, limit: int, now: datetime) -> list[ParticipantOverview]:
+        """Like list_recent, joined in one query to the task each one holds live."""
+        rows = self._conn.execute(
+            "SELECT p.name, p.last_seen, p.current_channel, p.current_task_id, "
+            "t.title, t.updated_at, p.usage_session_pct, p.usage_session_resets_at, "
+            "p.usage_weekly_pct, p.usage_weekly_resets_at, p.usage_reported_at "
+            "FROM participants p LEFT JOIN tasks t ON t.id = p.current_task_id "
+            "AND t.lease_owner = p.name AND t.status = 'claimed' "
+            "AND t.lease_expires_at > ? "
+            "ORDER BY p.last_seen DESC, p.name LIMIT ?",
+            (_timestamp(now), limit),
+        ).fetchall()
+        return [_overview_from_row(row) for row in rows]
+
 
 def participant_to_dict(participant: Participant) -> dict:
     return asdict(participant)
 
 
+def overview_to_dict(overview: ParticipantOverview, now: datetime) -> dict:
+    """Serialize for the dashboard; presence is computed against `now`."""
+    participant = overview.participant
+    return {
+        "name": participant.name,
+        "last_seen": participant.last_seen,
+        "presence": presence(participant.last_seen, now),
+        "current_channel": participant.current_channel,
+        "current_task": _optional_asdict(overview.current_task),
+        "usage": _usage_to_dict(overview.usage, overview.usage_reported_at),
+    }
+
+
+def _usage_to_dict(usage: UsageReport | None, reported_at: str | None) -> dict | None:
+    if usage is None:
+        return None
+    return {
+        "session": _optional_asdict(usage.session),
+        "weekly": _optional_asdict(usage.weekly),
+        "reported_at": reported_at,
+    }
+
+
+def _optional_asdict(value: Any) -> dict | None:
+    return None if value is None else asdict(value)
+
+
 __all__ = [
+    "CurrentTask",
+    "IDLE_WITHIN",
+    "ONLINE_WITHIN",
     "Participant",
+    "ParticipantOverview",
     "ParticipantStore",
     "UsageReport",
     "UsageWindow",
     "ensure_participants_schema",
+    "overview_to_dict",
     "parse_usage_report",
     "participant_to_dict",
+    "presence",
 ]

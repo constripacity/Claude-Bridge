@@ -75,6 +75,7 @@ from .streamable_http import (
 from .participants import (
     ParticipantStore,
     ensure_participants_schema,
+    overview_to_dict,
     parse_usage_report,
     participant_to_dict,
 )
@@ -2445,7 +2446,13 @@ async def api_state(request: Request) -> JSONResponse:
         "retention_days": RETENTION_DAYS,
         "audit_enabled": AUDIT_ENABLED,
         "server_time": utc_now_iso(),
+        "participants": _participants_state(datetime.now(timezone.utc)),
     })
+
+
+def _participants_state(now: datetime) -> list[dict]:
+    overviews = participant_store().list_overview(limit=100, now=now)
+    return [overview_to_dict(overview, now) for overview in overviews]
 
 
 async def api_messages(request: Request) -> JSONResponse:

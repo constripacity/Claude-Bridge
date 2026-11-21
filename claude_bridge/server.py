@@ -41,6 +41,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.requests import Request
+from starlette.types import Scope
 
 from ._version import VERSION
 from .auth import (
@@ -3118,10 +3119,28 @@ _routes = [
     Route("/sse", endpoint=handle_sse),
     Mount("/messages/", app=handle_post_message),
 ]
+
+
+class RevalidatingStaticFiles(StaticFiles):
+    """Static files that browsers revalidate on every load (ETag keeps it a cheap 304)."""
+
+    def file_response(
+        self,
+        full_path: str | os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        # Also set on the 304; without it browsers keep a stale app.js after a deploy.
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 if os.path.isdir(WEB_DIR) and not SETTINGS.no_dashboard:
     # Catch-all static mount goes LAST so it doesn't shadow API routes.
     # html=True makes "/" serve index.html.
-    _routes.append(Mount("/", app=StaticFiles(directory=WEB_DIR, html=True)))
+    _routes.append(Mount("/", app=RevalidatingStaticFiles(directory=WEB_DIR, html=True)))
 
 _cors_kwargs: dict[str, object] = {
     "allow_origins": CORS_EXTRA_ORIGINS,

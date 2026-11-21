@@ -36,6 +36,24 @@ versioning where the Python packaging format allows.
   replace a still-pending task's payload, and optionally its `priority` and
   `delay_seconds`, in place, and resets `attempts`. Claimed or finished tasks and
   tasks enqueued without `enqueued_by` are rejected.
+- **Task titles.** `bridge_enqueue` and `bridge_replace` take an optional
+  `title` (1..120 characters). Without one the bridge derives it from the
+  payload (`title` or `task` field, else the text; first line, 80 characters).
+  Task views, `bridge_tasks` and `bridge_claim` show it.
+- **Usage reports.** `POST /api/participants/{name}/usage` stores a
+  participant's latest five-hour and weekly Claude rate-limit use.
+  `scripts/claude-statusline-usage.py` is a Claude Code `statusLine` command
+  that sends it at most once a minute.
+- **Participants in the dashboard.** `/api/state` has `participants` with
+  presence, the current task (title, claim time) and usage. The dashboard shows
+  them in a Participants panel (compact on mobile).
+- Schema: new nullable `tasks.title` and five `participants.usage_*` columns.
+  An older database upgrades in place; the task-queue schema version stays 1.
+
+### Fixed
+
+- The dashboard failed to render messages: the timestamp formatter was lost in an
+  earlier merge, so a message row threw a `ReferenceError`.
 
 ## [1.3.0] - 2026-08-23
 

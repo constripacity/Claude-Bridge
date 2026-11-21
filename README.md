@@ -287,6 +287,12 @@ bridge_enqueue(
 )
 ```
 
+A task has a `title` for lists and the dashboard (1..120 characters). Without
+one, the bridge derives it from the payload: the `title` or `task` field of a
+JSON object, else the payload text, reduced to its first line and cut to 80
+characters. `bridge_replace` derives it again from the new payload unless you
+give a `title`.
+
 Each worker claims the next task, holding a lease (a visibility timeout). Two
 workers never get the same task; `wait_seconds` long-polls an empty queue:
 
@@ -329,6 +335,35 @@ bounded: 16 KiB per note (`content`/`too_large`), 64 KiB in total per task
 Names are self-declared, because all
 clients share one bearer token: treat the list as a presence hint, not identity.
 
+### Report Claude usage from the status line
+
+`scripts/claude-statusline-usage.py` is a Claude Code `statusLine` command
+(stdlib only, Python 3.9+). It prints a short line such as `5h 42% | wk 17%`
+and posts the five-hour and weekly rate-limit windows to the bridge, at most
+once a minute. The dashboard then shows them per participant. Claude Code sends
+`rate_limits` only to Pro, Max and Ultra subscribers and only after the first
+API response; without it the script prints `-` and sends nothing.
+
+Copy the script to a stable path and add it to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "python3 ~/.claude/claude-statusline-usage.py"
+  }
+}
+```
+
+Set these variables in the environment that starts Claude Code, never in a
+committed file:
+
+| Variable | Value |
+|---|---|
+| `CLAUDE_BRIDGE_URL` | The bridge base URL, for example `http://127.0.0.1:8765` |
+| `CLAUDE_BRIDGE_TOKEN` | The bridge bearer token, if the bridge uses one |
+| `CLAUDE_BRIDGE_PARTICIPANT` | The participant name, the same as your `sender`/`consumer` |
+
 ## Channels
 
 Channels are created on first write. A readable convention is
@@ -370,16 +405,25 @@ Core HTTP endpoints:
 | Endpoint | Purpose |
 |---|---|
 | `GET /status` | Minimal unauthenticated health check |
-| `GET /api/state` | Channel counts, senders, version, and uptime |
+| `GET /api/state` | Channel counts, senders, version, uptime, and participants |
 | `GET /api/messages?channel=X&since_id=Y&limit=N` | Bounded channel history |
 | `GET /api/messages/{id}` | One message detail |
 | `GET /api/wait?channel=X&consumer_id=Y` | Bounded long poll using a consumer or message cursor |
 | `POST /api/send` | Send legacy text or a protocol-v1 message, with optional idempotency |
 | `POST /api/ack` | Advance one durable consumer cursor |
 | `POST /api/clear` | Clear one channel |
+| `POST /api/participants/{name}/usage` | Store a participant's latest Claude usage report |
 | `GET`, `POST`, `DELETE /api/session` | Inspect, create, or revoke an opaque dashboard session |
 | `GET /api/audit?limit=N` | Recent audit events when enabled |
 | `GET /events/channel/<channel>` | Live event stream with bounded replay |
+
+`participants` in `/api/state` lists the newest 100 participants with
+`presence` (`online` when seen in the last 10 minutes, `idle` in the last 24
+hours, else `offline`, by server time), `current_task` (`id`, `title`,
+`claimed_since`) or `null`, and `usage` or `null`. The usage endpoint takes
+`{"session": {"used_pct": 42, "resets_at": 1767225600}, "weekly": {...}}`:
+each window is optional, `used_pct` is 0..100 and `resets_at` is unix seconds
+or ISO-8601 with an offset. A report replaces the one before.
 
 The event stream can drop a slow subscriber after its buffer fills; durable
 history remains authoritative. Reconnect with the last message ID and honor

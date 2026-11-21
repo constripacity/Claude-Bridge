@@ -9,6 +9,7 @@ import {
   Icon,
   LiveDot,
   SenderPill,
+  fmtTs,
 } from './shared.jsx';
 
 function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {

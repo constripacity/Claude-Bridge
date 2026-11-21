@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Iterator, Mapping
 
-from .timestamps import as_utc, utc_timestamp
+from .timestamps import as_utc, parse_timestamp, utc_timestamp
 from .validation import (
     DEFAULT_LIMITS,
     BridgeValidationError,
@@ -73,10 +73,6 @@ class ReservationStatus(str, Enum):
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 @contextmanager
@@ -188,7 +184,7 @@ class IdempotencyRecord:
     expires_at: str | None
 
     def is_expired(self, now: datetime | None = None) -> bool:
-        return self.expires_at is not None and _parse_timestamp(self.expires_at) <= as_utc(
+        return self.expires_at is not None and parse_timestamp(self.expires_at) <= as_utc(
             now or _utc_now()
         )
 

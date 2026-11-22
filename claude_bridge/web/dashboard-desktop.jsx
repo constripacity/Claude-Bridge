@@ -21,6 +21,10 @@ import {
 
 const { useState } = React;
 
+// Side columns grow with the viewport between a readable minimum and a cap.
+const SIDEBAR_WIDTH = 'clamp(200px, 18vw, 320px)';
+const INSPECTOR_COLUMN_WIDTH = 'clamp(280px, 26vw, 460px)';
+
 function HeaderBar({ state, authControl }) {
   const totals = {
     channels: state?.channels?.length ?? 0,
@@ -30,17 +34,17 @@ function HeaderBar({ state, authControl }) {
   };
   return (
     <div style={{
-      height: 48, background: 'var(--bg-deep)',
+      minHeight: 48, boxSizing: 'border-box', background: 'var(--bg-deep)',
       borderBottom: '1px solid var(--hairline)',
-      display: 'flex', alignItems: 'center', padding: '0 20px',
-      position: 'relative',
+      display: 'flex', alignItems: 'center', gap: 16, padding: '6px 20px',
+      position: 'relative', flexShrink: 0,
     }}>
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0, height: 2,
         background: 'linear-gradient(90deg, transparent, var(--blue) 30%, var(--blue) 70%, transparent)',
         opacity: 0.5, filter: 'blur(0.5px)',
       }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         <BridgeMark size={18} color="var(--blue)" />
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600,
@@ -52,7 +56,11 @@ function HeaderBar({ state, authControl }) {
         }}>v{totals.version}</span>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginLeft: 32 }}>
+      {/* Stats wrap to a second line when the bar is too narrow for one. */}
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+        columnGap: 18, rowGap: 4, marginLeft: 16, flex: '1 1 0', minWidth: 240,
+      }}>
         <Stat label="STATUS" value={
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <LiveDot color="var(--green)" />
@@ -65,7 +73,7 @@ function HeaderBar({ state, authControl }) {
         <Stat label="MESSAGES" value={totals.messages} mono />
       </div>
 
-      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         <HeaderBtn><Icon name="search" size={14} color="var(--text-mid)" /></HeaderBtn>
         <HeaderBtn><Icon name="book"   size={14} color="var(--text-mid)" /></HeaderBtn>
         <HeaderBtn><Icon name="gear"   size={14} color="var(--text-mid)" /></HeaderBtn>
@@ -77,7 +85,7 @@ function HeaderBar({ state, authControl }) {
 
 function Stat({ label, value, mono }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, whiteSpace: 'nowrap' }}>
       <span style={{
         fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 500,
         letterSpacing: '0.16em', color: 'var(--text-faint)',
@@ -107,7 +115,7 @@ function Sidebar({ channels, activeId, onSelect, onNewChannel }) {
   });
   return (
     <div style={{
-      width: 252, background: 'var(--bg-base)',
+      width: SIDEBAR_WIDTH, flexShrink: 0, background: 'var(--bg-base)',
       borderRight: '1px solid var(--hairline)',
       display: 'flex', flexDirection: 'column',
     }}>
@@ -449,7 +457,7 @@ function Inspector({ detail }) {
   if (!detail) {
     return (
       <div style={{
-        width: 360, background: 'var(--bg-base)',
+        background: 'var(--bg-base)',
         display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
       }}>
         <ChromeLabel>Inspector</ChromeLabel>
@@ -465,7 +473,7 @@ function Inspector({ detail }) {
   const ts = fmtTs(detail.ts, true);
   return (
     <div style={{
-      width: 360, background: 'var(--bg-base)',
+      background: 'var(--bg-base)',
       display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
     }}>
       <ChromeLabel>Inspector</ChromeLabel>
@@ -601,7 +609,10 @@ function DashboardDesktop(props) {
           onClear={props.onClear}
           defaultSender={props.defaultSender}
         />
-        <div style={{ width: 360, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{
+          width: INSPECTOR_COLUMN_WIDTH, flexShrink: 0,
+          display: 'flex', flexDirection: 'column', minHeight: 0,
+        }}>
           <Inspector detail={props.detail} />
           <ParticipantsPanel state={props.state} />
         </div>

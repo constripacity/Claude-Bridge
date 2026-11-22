@@ -169,8 +169,12 @@ def _parse_resets_at(value: Any, field: str, now: datetime) -> str | None:
     return utc_timestamp(utc_instant)
 
 
+def _is_plausible_reset(instant: datetime, now: datetime) -> bool:
+    return now - RESETS_AT_MAX_PAST <= instant <= now + RESETS_AT_MAX_FUTURE
+
+
 def _require_plausible_reset(instant: datetime, field: str, now: datetime) -> None:
-    if not now - RESETS_AT_MAX_PAST <= instant <= now + RESETS_AT_MAX_FUTURE:
+    if not _is_plausible_reset(instant, now):
         message = (
             f"must be within {RESETS_AT_MAX_PAST.days} day before and "
             f"{RESETS_AT_MAX_FUTURE.days} days after server time"
@@ -193,9 +197,22 @@ def _window_columns(window: UsageWindow | None) -> tuple[float | None, str | Non
 
 
 def _window_from_columns(
-    used_pct: float | None, resets_at: str | None
+    used_pct: float | None, resets_at: str | None, reported_at: datetime
 ) -> UsageWindow | None:
-    return None if used_pct is None else UsageWindow(used_pct, resets_at)
+    if used_pct is None:
+        return None
+    return UsageWindow(used_pct, _stored_reset_or_none(resets_at, reported_at))
+
+
+def _stored_reset_or_none(resets_at: str | None, reported_at: datetime) -> str | None:
+    # Rows written before the plausibility check can hold a reset like 1970.
+    if resets_at is None:
+        return None
+    try:
+        plausible = _is_plausible_reset(parse_timestamp(resets_at), reported_at)
+    except (ValueError, TypeError):  # Unparsable or offset-less legacy text.
+        return None
+    return resets_at if plausible else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,12 +245,13 @@ def _overview_from_row(row: sqlite3.Row) -> ParticipantOverview:
         current_task = CurrentTask(task_id, row["task_title"], row["claimed_since"])
     usage = None
     if row["usage_reported_at"] is not None:
+        reported_at = parse_timestamp(row["usage_reported_at"])
         usage = UsageReport(
             session=_window_from_columns(
-                row["usage_session_pct"], row["usage_session_resets_at"]
+                row["usage_session_pct"], row["usage_session_resets_at"], reported_at
             ),
             weekly=_window_from_columns(
-                row["usage_weekly_pct"], row["usage_weekly_resets_at"]
+                row["usage_weekly_pct"], row["usage_weekly_resets_at"], reported_at
             ),
         )
     return ParticipantOverview(

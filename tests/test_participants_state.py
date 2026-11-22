@@ -110,6 +110,21 @@ def test_usage_stale_at_is_the_report_time_plus_the_stale_threshold(client):
     assert parse_z(usage["stale_at"]) - parse_z(usage["reported_at"]) == USAGE_STALE_AFTER
 
 
+def test_legacy_bad_reset_time_reads_as_unknown(client):
+    reported_at = utc_timestamp(datetime.now(timezone.utc))
+    bridge.db().execute(
+        "INSERT INTO participants (name, last_seen, usage_session_pct, "
+        "usage_session_resets_at, usage_weekly_pct, usage_weekly_resets_at, "
+        "usage_reported_at) VALUES ('old', ?, 40, '1970-01-01T00:00:01Z', 7, "
+        "'not a time', ?)",
+        (reported_at, reported_at),
+    )
+    bridge.db().commit()
+    usage = state_participants(client)["old"]["usage"]
+    assert usage["session"] == {"used_pct": 40.0, "resets_at": None}
+    assert usage["weekly"] == {"used_pct": 7.0, "resets_at": None}
+
+
 def test_state_participants_use_one_query(client):
     for name in ("a", "b", "c"):
         call("bridge_send", {"channel": "chat", "sender": name, "content": "hi"})

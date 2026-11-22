@@ -9,7 +9,8 @@ import DashboardMobile from './dashboard-mobile.jsx';
 import { withReceiptTime } from './shared.jsx';
 
 const POLL_MS = 2000;
-const MOBILE_MAX = 640;
+// Desktop side columns need 200 + 280px (clamp in dashboard-desktop.jsx); below this the feed is too narrow.
+const MOBILE_MAX = 900;
 
 class AuthError extends Error {
   constructor(message) {
@@ -495,7 +496,7 @@ function App() {
 
   return (
     <div style={{
-      width: '100vw', height: '100vh', background: 'var(--bg-base)',
+      width: '100%', height: '100%', background: 'var(--bg-base)',
       display: 'flex', flexDirection: 'column',
     }}>
       <div style={{ flex: 1, minHeight: 0 }}>
@@ -530,6 +531,7 @@ function App() {
           borderTop: '1px solid rgba(248, 81, 73, 0.4)',
           padding: '8px 16px',
           fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)',
+          overflowWrap: 'anywhere',
         }}>
           {error}
         </div>

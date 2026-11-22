@@ -2,6 +2,9 @@
 
 import React from 'react';
 
+// One-line text that ends in an ellipsis when its box is too narrow.
+const TRUNCATE = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+
 // A UTC ISO timestamp as the viewer's local time with a zone label;
 // the raw value on a parse failure rather than "Invalid Date".
 function fmtTs(iso, withDate = false) {
@@ -90,13 +93,14 @@ const SenderPill = ({ name, size = 'md' }) => {
     ? { fontSize: 10, padding: '1px 6px' }
     : { fontSize: 11, padding: '2px 7px' };
   return (
-    <span style={{
+    <span title={name} style={{
       ...sz,
       fontFamily: 'var(--mono)', fontWeight: 500,
       color: c.fg, background: c.bg,
       border: `1px solid ${c.border}`,
-      borderRadius: 3, display: 'inline-flex', alignItems: 'center',
+      borderRadius: 3, display: 'inline-block', verticalAlign: 'middle',
       lineHeight: 1.4, letterSpacing: 0,
+      ...TRUNCATE, maxWidth: '100%', boxSizing: 'border-box',
     }}>{name}</span>
   );
 };
@@ -182,6 +186,8 @@ const BridgeMark = ({ size = 24, color = 'var(--blue)' }) => (
 const PRESENCE_COLORS = {
   online: 'var(--green)', idle: 'var(--amber)', offline: 'var(--text-faint)',
 };
+// Usage bars wrap onto separate lines when the panel is narrower than two of these.
+const usageBarBasis = compact => (compact ? '96px' : '150px');
 
 function fmtSpan(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -218,7 +224,8 @@ function UsageBar({ label, usageWindow, stale, nowMs, compact }) {
   const pct = Math.min(100, Math.max(0, usageWindow.used_pct));
   return (
     <div title={fmtResetIn(usageWindow.resets_at, nowMs)} style={{
-      display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
+      display: 'flex', alignItems: 'center', gap: 6,
+      flex: `1 1 ${usageBarBasis(compact)}`, minWidth: 0,
       opacity: stale ? 0.4 : 1,
       fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)',
     }}>
@@ -250,7 +257,7 @@ function UsageBars({ usage, nowMs, compact }) {
   const stale = usageIsStale(usage, nowMs);
   return (
     <div title={stale ? `usage reported ${fmtAgo(usage.reported_at, nowMs)}` : undefined}
-         style={{ display: 'flex', gap: compact ? 8 : 12 }}>
+         style={{ display: 'flex', flexWrap: 'wrap', columnGap: compact ? 8 : 12, rowGap: 4 }}>
       <UsageBar label="5h" usageWindow={usage.session} stale={stale} nowMs={nowMs} compact={compact} />
       <UsageBar label="week" usageWindow={usage.weekly} stale={stale} nowMs={nowMs} compact={compact} />
     </div>
@@ -274,9 +281,11 @@ function ParticipantActivity({ p, nowMs }) {
     }}>
       <span style={{
         color: 'var(--text-mid)', minWidth: 0,
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        ...TRUNCATE,
       }}>{task.title || task.id}</span>
-      <span style={{ color: 'var(--blue)', flexShrink: 0 }}>#{p.current_channel}</span>
+      <span title={p.current_channel} style={{ color: 'var(--blue)', maxWidth: '45%', ...TRUNCATE }}>
+        #{p.current_channel}
+      </span>
       <span style={{ color: 'var(--text-faint)', flexShrink: 0 }}>
         {fmtSpan(ageMs(task.claimed_since, nowMs))}
       </span>
@@ -297,13 +306,16 @@ function ParticipantRow({ p, nowMs, compact = false }) {
         <span style={{
           color: 'var(--text)', fontWeight: 500, flexShrink: 0,
           maxWidth: compact ? '40%' : '55%',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          ...TRUNCATE,
         }}>{p.name}</span>
         {compact
           ? <span style={{ minWidth: 0, flex: 1, display: 'flex' }}>
               <ParticipantActivity p={p} nowMs={nowMs} />
             </span>
-          : <span style={{ marginLeft: 'auto', color: 'var(--text-faint)', fontSize: 10 }}>
+          : <span style={{
+              marginLeft: 'auto', color: 'var(--text-faint)', fontSize: 10,
+              flexShrink: 0, whiteSpace: 'nowrap',
+            }}>
               {fmtAgo(p.last_seen, nowMs)}
             </span>}
       </div>
@@ -339,6 +351,6 @@ function serverNowMs(state) {
 
 export {
   Icon, LiveDot, Eyebrow, SenderPill, HighlightedJson, ChromeLabel,
-  BridgeMark, SENDER_COLORS, fmtTs,
+  BridgeMark, SENDER_COLORS, TRUNCATE, fmtTs,
   ParticipantRow, presenceSummary, serverNowMs, withReceiptTime,
 };

@@ -14,11 +14,16 @@ import {
   ParticipantRow,
   SenderPill,
   SENDER_COLORS,
+  TRUNCATE,
   fmtTs,
   serverNowMs,
 } from './shared.jsx';
 
 const { useState } = React;
+
+// Side columns grow with the viewport between a readable minimum and a cap.
+const SIDEBAR_WIDTH = 'clamp(200px, 18vw, 320px)';
+const INSPECTOR_COLUMN_WIDTH = 'clamp(280px, 26vw, 460px)';
 
 function HeaderBar({ state, authControl }) {
   const totals = {
@@ -29,17 +34,17 @@ function HeaderBar({ state, authControl }) {
   };
   return (
     <div style={{
-      height: 48, background: 'var(--bg-deep)',
+      minHeight: 48, boxSizing: 'border-box', background: 'var(--bg-deep)',
       borderBottom: '1px solid var(--hairline)',
-      display: 'flex', alignItems: 'center', padding: '0 20px',
-      position: 'relative',
+      display: 'flex', alignItems: 'center', gap: 16, padding: '6px 20px',
+      position: 'relative', flexShrink: 0,
     }}>
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0, height: 2,
         background: 'linear-gradient(90deg, transparent, var(--blue) 30%, var(--blue) 70%, transparent)',
         opacity: 0.5, filter: 'blur(0.5px)',
       }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         <BridgeMark size={18} color="var(--blue)" />
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600,
@@ -51,7 +56,11 @@ function HeaderBar({ state, authControl }) {
         }}>v{totals.version}</span>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginLeft: 32 }}>
+      {/* Stats wrap to a second line when the bar is too narrow for one. */}
+      <div style={{
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+        columnGap: 18, rowGap: 4, marginLeft: 16, flex: '1 1 0', minWidth: 240,
+      }}>
         <Stat label="STATUS" value={
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <LiveDot color="var(--green)" />
@@ -64,7 +73,7 @@ function HeaderBar({ state, authControl }) {
         <Stat label="MESSAGES" value={totals.messages} mono />
       </div>
 
-      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         <HeaderBtn><Icon name="search" size={14} color="var(--text-mid)" /></HeaderBtn>
         <HeaderBtn><Icon name="book"   size={14} color="var(--text-mid)" /></HeaderBtn>
         <HeaderBtn><Icon name="gear"   size={14} color="var(--text-mid)" /></HeaderBtn>
@@ -76,7 +85,7 @@ function HeaderBar({ state, authControl }) {
 
 function Stat({ label, value, mono }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, whiteSpace: 'nowrap' }}>
       <span style={{
         fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 500,
         letterSpacing: '0.16em', color: 'var(--text-faint)',
@@ -106,7 +115,7 @@ function Sidebar({ channels, activeId, onSelect, onNewChannel }) {
   });
   return (
     <div style={{
-      width: 252, background: 'var(--bg-base)',
+      width: SIDEBAR_WIDTH, flexShrink: 0, background: 'var(--bg-base)',
       borderRight: '1px solid var(--hairline)',
       display: 'flex', flexDirection: 'column',
     }}>
@@ -140,7 +149,7 @@ function Sidebar({ channels, activeId, onSelect, onNewChannel }) {
               letterSpacing: '0.12em',
             }}>
               <Icon name="chev" size={10} color="var(--text-faint)" />
-              <span>{group || 'ungrouped'}:</span>
+              <span style={TRUNCATE}>{group || 'ungrouped'}:</span>
               <span style={{ color: 'var(--text-faint)', opacity: 0.7 }}>{chs.length}</span>
             </div>
             {chs.map(c => (
@@ -184,7 +193,7 @@ function ChannelRow({ c, active, onSelect }) {
           fontFamily: 'var(--mono)', fontSize: 12,
           color: active ? 'var(--text)' : 'var(--text-mid)',
           fontWeight: active ? 500 : 400, flex: 1,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          ...TRUNCATE,
         }}>{c.name}</span>
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 10,
@@ -223,18 +232,21 @@ function MessageFeed({ channel, channelMeta, messages, selectedId, onSelect, onS
         padding: '14px 20px', borderBottom: '1px solid var(--hairline)',
         display: 'flex', alignItems: 'center', gap: 12,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <Icon name="hash" size={13} color="var(--blue)" />
-          <span style={{
+          <span title={channel} style={{
             fontFamily: 'var(--mono)', fontSize: 13,
-            color: 'var(--text)', fontWeight: 500,
+            color: 'var(--text)', fontWeight: 500, ...TRUNCATE,
           }}>{channel || '— no channel —'}</span>
         </div>
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 10,
           color: 'var(--text-faint)', letterSpacing: '0.06em',
+          ...TRUNCATE,
         }}>{(channelMeta?.count ?? 0)} MESSAGES · {senderCount} SENDERS · LAST {lastTs}</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div style={{
+          marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0,
+        }}>
           {channel && (
             <button onClick={() => onClear && onClear(channel)} title="Clear this channel" style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -282,7 +294,7 @@ function MessageRow({ m, selected, onSelect }) {
       background: selected ? 'rgba(88, 166, 255, 0.05)' : 'transparent',
       borderLeft: selected ? '2px solid var(--blue)' : '2px solid transparent',
       display: 'grid',
-      gridTemplateColumns: 'auto auto 1fr auto',
+      gridTemplateColumns: 'auto fit-content(40%) minmax(0, 1fr) auto',
       gap: 10, alignItems: 'baseline',
       cursor: 'pointer',
     }}>
@@ -303,7 +315,7 @@ function MessageRow({ m, selected, onSelect }) {
       <span style={{
         fontFamily: 'var(--mono)', fontSize: 12,
         color: selected ? 'var(--text)' : 'var(--text-mid)',
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        ...TRUNCATE,
         minWidth: 0,
       }}>{m.preview}</span>
 
@@ -358,13 +370,13 @@ function SendBar({ channel, defaultSender, onSend }) {
       }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
+            display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
             padding: '3px 8px', background: 'var(--bg-elev)',
             borderRadius: 3, border: '1px solid var(--hairline-strong)',
           }}>
             <Icon name="hash" size={10} color="var(--blue)" />
-            <span style={{
-              fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)',
+            <span title={channel} style={{
+              fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', ...TRUNCATE,
             }}>{channel}</span>
           </div>
 
@@ -445,7 +457,7 @@ function Inspector({ detail }) {
   if (!detail) {
     return (
       <div style={{
-        width: 360, background: 'var(--bg-base)',
+        background: 'var(--bg-base)',
         display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
       }}>
         <ChromeLabel>Inspector</ChromeLabel>
@@ -461,7 +473,7 @@ function Inspector({ detail }) {
   const ts = fmtTs(detail.ts, true);
   return (
     <div style={{
-      width: 360, background: 'var(--bg-base)',
+      background: 'var(--bg-base)',
       display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
     }}>
       <ChromeLabel>Inspector</ChromeLabel>
@@ -555,7 +567,7 @@ const KV = ({ k, v, mono, color }) => (
     <span style={{
       fontFamily: mono ? 'var(--mono)' : 'var(--sans)',
       color: color || 'var(--text)',
-      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      ...TRUNCATE,
     }}>{v}</span>
   </div>
 );
@@ -597,7 +609,10 @@ function DashboardDesktop(props) {
           onClear={props.onClear}
           defaultSender={props.defaultSender}
         />
-        <div style={{ width: 360, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{
+          width: INSPECTOR_COLUMN_WIDTH, flexShrink: 0,
+          display: 'flex', flexDirection: 'column', minHeight: 0,
+        }}>
           <Inspector detail={props.detail} />
           <ParticipantsPanel state={props.state} />
         </div>

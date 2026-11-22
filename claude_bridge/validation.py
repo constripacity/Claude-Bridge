@@ -60,6 +60,12 @@ class BridgeValidationError(ValueError):
 
 _MESSAGE_TYPE_RE = re.compile(r"^[a-z][a-z0-9._-]*$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+# Optional closing quote: an unterminated string must match once, not retry per quote.
+_JSON_STRING_RE = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"?', re.DOTALL)
+_NON_BRACKET_RE = re.compile(r"[^\[\]{}]+")
+
+# Generous ceiling for JSON that no tighter ValidationLimits field covers.
+GENERAL_JSON_MAX_DEPTH = 128
 
 
 def _require_string(value: Any, field: str) -> str:
@@ -255,8 +261,29 @@ def canonical_json(value: Any, *, field: str = "value") -> str:
 
     # This general helper has a generous recursion ceiling. Public protocol
     # boundaries apply their tighter ValidationLimits before calling it.
-    _validate_json_tree(value, field=field, max_depth=128)
+    _validate_json_tree(value, field=field, max_depth=GENERAL_JSON_MAX_DEPTH)
     return _encode_json(value, field=field)
+
+
+def _exceeds_json_depth(raw: str, max_depth: int) -> bool:
+    brackets = _NON_BRACKET_RE.sub("", _JSON_STRING_RE.sub("", raw))
+    depth = 0
+    for bracket in brackets:
+        depth += 1 if bracket in "[{" else -1
+        if depth > max_depth:
+            return True
+    return False
+
+
+def loads_bounded_json(raw: str, *, max_depth: int = GENERAL_JSON_MAX_DEPTH) -> Any:
+    """Parse JSON text, but raise ValueError past ``max_depth`` nested arrays/objects.
+
+    The interpreter's recursion limit differs per Python version; this limit does not.
+    """
+
+    if _exceeds_json_depth(raw, max_depth):
+        raise ValueError(f"JSON is nested more than {max_depth} levels")
+    return json.loads(raw)
 
 
 def validate_json_value(
@@ -338,8 +365,10 @@ def validate_finite_number(value: Any, field: str) -> float:
 __all__ = [
     "BridgeValidationError",
     "DEFAULT_LIMITS",
+    "GENERAL_JSON_MAX_DEPTH",
     "ValidationLimits",
     "canonical_json",
+    "loads_bounded_json",
     "normalize_limit",
     "validate_channel",
     "validate_consumer",

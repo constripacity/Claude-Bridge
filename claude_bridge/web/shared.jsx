@@ -195,7 +195,15 @@ function fmtSpan(ms) {
 
 const ageMs = (iso, nowMs) => nowMs - Date.parse(iso);
 const fmtAgo = (iso, nowMs) => (iso ? `${fmtSpan(ageMs(iso, nowMs))} ago` : '—');
-const fmtResetIn = (iso, nowMs) => (iso ? `resets in ${fmtSpan(-ageMs(iso, nowMs))}` : '');
+// A past reset time means the window rolled over, so the shown use is stale.
+const resetHasPassed = (iso, nowMs) => Boolean(iso) && ageMs(iso, nowMs) >= 0;
+const fmtTimeToReset = (iso, nowMs) => fmtSpan(-ageMs(iso, nowMs));
+function fmtReset(iso, nowMs) {
+  if (!iso) return '';
+  return resetHasPassed(iso, nowMs)
+    ? `reset ${fmtAgo(iso, nowMs)}`
+    : `resets in ${fmtTimeToReset(iso, nowMs)}`;
+}
 // The server owns the stale threshold and sends the cutoff.
 const usageIsStale = (usage, nowMs) => nowMs > Date.parse(usage.stale_at);
 
@@ -216,10 +224,12 @@ function usageColor(pct) {
 function UsageBar({ label, usageWindow, stale, nowMs, compact }) {
   if (!usageWindow) return null;
   const pct = Math.min(100, Math.max(0, usageWindow.used_pct));
+  const resetPassed = resetHasPassed(usageWindow.resets_at, nowMs);
+  const dim = stale || resetPassed;
   return (
-    <div title={fmtResetIn(usageWindow.resets_at, nowMs)} style={{
+    <div title={fmtReset(usageWindow.resets_at, nowMs)} style={{
       display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
-      opacity: stale ? 0.4 : 1,
+      opacity: dim ? 0.4 : 1,
       fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)',
     }}>
       <span style={{ width: compact ? 16 : 24, flexShrink: 0 }}>{label}</span>
@@ -229,7 +239,7 @@ function UsageBar({ label, usageWindow, stale, nowMs, compact }) {
       }}>
         <span style={{
           display: 'block', height: '100%', width: `${pct}%`,
-          background: stale ? 'var(--text-faint)' : usageColor(pct),
+          background: dim ? 'var(--text-faint)' : usageColor(pct),
         }} />
       </span>
       <span style={{
@@ -238,7 +248,7 @@ function UsageBar({ label, usageWindow, stale, nowMs, compact }) {
       }}>{Math.round(pct)}%</span>
       {!compact && usageWindow.resets_at && (
         <span style={{ flexShrink: 0, color: 'var(--text-faint)' }}>
-          ↻ {fmtSpan(-ageMs(usageWindow.resets_at, nowMs))}
+          ↻ {resetPassed ? 'reset' : fmtTimeToReset(usageWindow.resets_at, nowMs)}
         </span>
       )}
     </div>

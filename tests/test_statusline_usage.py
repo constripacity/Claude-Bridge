@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -67,7 +68,8 @@ def test_parse_usage_clamps_the_percent():
 
 
 def test_parsed_report_is_a_valid_bridge_body():
-    report = parse_usage_report(statusline.parse_usage(FULL_STATUS))
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    report = parse_usage_report(statusline.parse_usage(FULL_STATUS), now=now)
     assert report.session.used_pct == 42.4
     assert report.weekly.resets_at == "2026-01-07T00:00:00.000000Z"
 

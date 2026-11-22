@@ -495,7 +495,7 @@ function App() {
 
   return (
     <div style={{
-      width: '100vw', height: '100vh', background: 'var(--bg-base)',
+      width: '100%', height: '100%', background: 'var(--bg-base)',
       display: 'flex', flexDirection: 'column',
     }}>
       <div style={{ flex: 1, minHeight: 0 }}>

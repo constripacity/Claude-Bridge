@@ -14,6 +14,7 @@ import {
   ParticipantRow,
   SenderPill,
   SENDER_COLORS,
+  TRUNCATE,
   fmtTs,
   serverNowMs,
 } from './shared.jsx';
@@ -140,7 +141,7 @@ function Sidebar({ channels, activeId, onSelect, onNewChannel }) {
               letterSpacing: '0.12em',
             }}>
               <Icon name="chev" size={10} color="var(--text-faint)" />
-              <span>{group || 'ungrouped'}:</span>
+              <span style={TRUNCATE}>{group || 'ungrouped'}:</span>
               <span style={{ color: 'var(--text-faint)', opacity: 0.7 }}>{chs.length}</span>
             </div>
             {chs.map(c => (
@@ -223,18 +224,21 @@ function MessageFeed({ channel, channelMeta, messages, selectedId, onSelect, onS
         padding: '14px 20px', borderBottom: '1px solid var(--hairline)',
         display: 'flex', alignItems: 'center', gap: 12,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <Icon name="hash" size={13} color="var(--blue)" />
-          <span style={{
+          <span title={channel} style={{
             fontFamily: 'var(--mono)', fontSize: 13,
-            color: 'var(--text)', fontWeight: 500,
+            color: 'var(--text)', fontWeight: 500, ...TRUNCATE,
           }}>{channel || '— no channel —'}</span>
         </div>
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 10,
           color: 'var(--text-faint)', letterSpacing: '0.06em',
+          ...TRUNCATE,
         }}>{(channelMeta?.count ?? 0)} MESSAGES · {senderCount} SENDERS · LAST {lastTs}</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div style={{
+          marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0,
+        }}>
           {channel && (
             <button onClick={() => onClear && onClear(channel)} title="Clear this channel" style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -282,7 +286,7 @@ function MessageRow({ m, selected, onSelect }) {
       background: selected ? 'rgba(88, 166, 255, 0.05)' : 'transparent',
       borderLeft: selected ? '2px solid var(--blue)' : '2px solid transparent',
       display: 'grid',
-      gridTemplateColumns: 'auto auto 1fr auto',
+      gridTemplateColumns: 'auto fit-content(40%) minmax(0, 1fr) auto',
       gap: 10, alignItems: 'baseline',
       cursor: 'pointer',
     }}>
@@ -358,13 +362,13 @@ function SendBar({ channel, defaultSender, onSend }) {
       }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
+            display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
             padding: '3px 8px', background: 'var(--bg-elev)',
             borderRadius: 3, border: '1px solid var(--hairline-strong)',
           }}>
             <Icon name="hash" size={10} color="var(--blue)" />
-            <span style={{
-              fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)',
+            <span title={channel} style={{
+              fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', ...TRUNCATE,
             }}>{channel}</span>
           </div>
 

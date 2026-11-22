@@ -10,10 +10,14 @@ import {
   LiveDot,
   ParticipantRow,
   SenderPill,
+  TRUNCATE,
   fmtTs,
   presenceSummary,
   serverNowMs,
 } from './shared.jsx';
+
+// Keeps one long channel chip from filling the whole scroll strip.
+const CHIP_LABEL_MAX_WIDTH = '60vw';
 
 function MobileHeader({ state, channels, activeId, onSelect, onNewChannel, authControl }) {
   return (
@@ -30,14 +34,16 @@ function MobileHeader({ state, channels, activeId, onSelect, onNewChannel, authC
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-            letterSpacing: '0.22em', color: 'var(--text)',
+            letterSpacing: '0.22em', color: 'var(--text)', ...TRUNCATE,
           }}>CLAUDE&nbsp;BRIDGE</div>
           <div style={{
             fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
             marginTop: 2, display: 'flex', alignItems: 'center', gap: 6,
           }}>
             <LiveDot color="var(--green)" size={5} />
-            <span>online · :8765 · {state?.uptime_human || '00:00:00'}</span>
+            <span style={TRUNCATE}>
+              online · :8765 · {state?.uptime_human || '00:00:00'}
+            </span>
           </div>
         </div>
         {authControl}
@@ -59,10 +65,11 @@ function MobileHeader({ state, channels, activeId, onSelect, onNewChannel, authC
               cursor: 'pointer',
             }}>
               <Icon name="hash" size={10} color={active ? 'var(--blue)' : 'var(--text-dim)'} />
-              <span style={{
+              <span title={c.id} style={{
                 fontFamily: 'var(--mono)', fontSize: 11,
                 color: active ? 'var(--text)' : 'var(--text-mid)',
                 fontWeight: active ? 500 : 400,
+                maxWidth: CHIP_LABEL_MAX_WIDTH, ...TRUNCATE,
               }}>{c.id}</span>
               <span style={{
                 fontFamily: 'var(--mono)', fontSize: 9,
@@ -241,7 +248,9 @@ function MobileParticipants({ state }) {
         fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
       }}>
         <Eyebrow>Participants</Eyebrow>
-        <span style={{ color: 'var(--text-faint)' }}>{presenceSummary(participants)}</span>
+        <span style={{ color: 'var(--text-faint)', ...TRUNCATE }}>
+          {presenceSummary(participants)}
+        </span>
         <span style={{ marginLeft: 'auto', transform: open ? 'rotate(180deg)' : 'none' }}>
           <Icon name="chev" size={10} color="var(--text-dim)" />
         </span>
@@ -285,12 +294,12 @@ function DashboardMobile(props) {
         borderBottom: '1px solid var(--hairline)',
       }}>
         <Icon name="hash" size={12} color="var(--blue)" />
-        <span style={{
+        <span title={props.activeChannel} style={{
           fontFamily: 'var(--mono)', fontSize: 12,
-          color: 'var(--text)', fontWeight: 500,
+          color: 'var(--text)', fontWeight: 500, ...TRUNCATE,
         }}>{props.activeChannel || '— no channel —'}</span>
         <span style={{
-          marginLeft: 'auto',
+          marginLeft: 'auto', flexShrink: 0, whiteSpace: 'nowrap',
           fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)',
         }}>{channelMeta?.count ?? 0} msgs</span>
       </div>

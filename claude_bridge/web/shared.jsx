@@ -2,6 +2,9 @@
 
 import React from 'react';
 
+// One-line text that ends in an ellipsis when its box is too narrow.
+const TRUNCATE = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+
 // A UTC ISO timestamp as the viewer's local time with a zone label;
 // the raw value on a parse failure rather than "Invalid Date".
 function fmtTs(iso, withDate = false) {
@@ -90,13 +93,14 @@ const SenderPill = ({ name, size = 'md' }) => {
     ? { fontSize: 10, padding: '1px 6px' }
     : { fontSize: 11, padding: '2px 7px' };
   return (
-    <span style={{
+    <span title={name} style={{
       ...sz,
       fontFamily: 'var(--mono)', fontWeight: 500,
       color: c.fg, background: c.bg,
       border: `1px solid ${c.border}`,
-      borderRadius: 3, display: 'inline-flex', alignItems: 'center',
+      borderRadius: 3, display: 'inline-block', verticalAlign: 'middle',
       lineHeight: 1.4, letterSpacing: 0,
+      ...TRUNCATE, maxWidth: '100%', boxSizing: 'border-box',
     }}>{name}</span>
   );
 };
@@ -271,7 +275,9 @@ function ParticipantActivity({ p, nowMs }) {
         color: 'var(--text-mid)', minWidth: 0,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>{task.title || task.id}</span>
-      <span style={{ color: 'var(--blue)', flexShrink: 0 }}>#{p.current_channel}</span>
+      <span title={p.current_channel} style={{ color: 'var(--blue)', maxWidth: '45%', ...TRUNCATE }}>
+        #{p.current_channel}
+      </span>
       <span style={{ color: 'var(--text-faint)', flexShrink: 0 }}>
         {fmtSpan(ageMs(task.claimed_since, nowMs))}
       </span>
@@ -298,7 +304,10 @@ function ParticipantRow({ p, nowMs, compact = false }) {
           ? <span style={{ minWidth: 0, flex: 1, display: 'flex' }}>
               <ParticipantActivity p={p} nowMs={nowMs} />
             </span>
-          : <span style={{ marginLeft: 'auto', color: 'var(--text-faint)', fontSize: 10 }}>
+          : <span style={{
+              marginLeft: 'auto', color: 'var(--text-faint)', fontSize: 10,
+              flexShrink: 0, whiteSpace: 'nowrap',
+            }}>
               {fmtAgo(p.last_seen, nowMs)}
             </span>}
       </div>
@@ -334,6 +343,6 @@ function serverNowMs(state) {
 
 export {
   Icon, LiveDot, Eyebrow, SenderPill, HighlightedJson, ChromeLabel,
-  BridgeMark, SENDER_COLORS, fmtTs,
+  BridgeMark, SENDER_COLORS, TRUNCATE, fmtTs,
   ParticipantRow, presenceSummary, serverNowMs, withReceiptTime,
 };

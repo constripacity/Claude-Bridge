@@ -187,6 +187,8 @@ const PRESENCE_COLORS = {
   online: 'var(--green)', idle: 'var(--amber)', offline: 'var(--text-faint)',
 };
 const USAGE_STALE_MS = 15 * 60 * 1000;
+// Usage bars wrap onto separate lines when the panel is narrower than two of these.
+const usageBarBasis = compact => (compact ? '96px' : '150px');
 
 function fmtSpan(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -222,7 +224,8 @@ function UsageBar({ label, usageWindow, stale, nowMs, compact }) {
   const pct = Math.min(100, Math.max(0, usageWindow.used_pct));
   return (
     <div title={fmtResetIn(usageWindow.resets_at, nowMs)} style={{
-      display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
+      display: 'flex', alignItems: 'center', gap: 6,
+      flex: `1 1 ${usageBarBasis(compact)}`, minWidth: 0,
       opacity: stale ? 0.4 : 1,
       fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)',
     }}>
@@ -254,7 +257,7 @@ function UsageBars({ usage, nowMs, compact }) {
   const stale = usageIsStale(usage, nowMs);
   return (
     <div title={stale ? `usage reported ${fmtAgo(usage.reported_at, nowMs)}` : undefined}
-         style={{ display: 'flex', gap: compact ? 8 : 12 }}>
+         style={{ display: 'flex', flexWrap: 'wrap', columnGap: compact ? 8 : 12, rowGap: 4 }}>
       <UsageBar label="5h" usageWindow={usage.session} stale={stale} nowMs={nowMs} compact={compact} />
       <UsageBar label="week" usageWindow={usage.weekly} stale={stale} nowMs={nowMs} compact={compact} />
     </div>

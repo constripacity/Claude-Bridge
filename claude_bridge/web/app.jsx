@@ -531,6 +531,7 @@ function App() {
           borderTop: '1px solid rgba(248, 81, 73, 0.4)',
           padding: '8px 16px',
           fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)',
+          overflowWrap: 'anywhere',
         }}>
           {error}
         </div>

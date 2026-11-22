@@ -138,7 +138,7 @@ function MobileMessageRow({ m, selected, onSelect }) {
       <div style={{
         fontFamily: 'var(--mono)', fontSize: 11,
         color: selected ? 'var(--text)' : 'var(--text-mid)',
-        lineHeight: 1.45,
+        lineHeight: 1.45, overflowWrap: 'anywhere',
         display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3,
         overflow: 'hidden',
       }}>{m.preview}</div>

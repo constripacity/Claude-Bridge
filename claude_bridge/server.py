@@ -22,10 +22,10 @@ import sqlite3
 import asyncio
 import time
 import weakref
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable, Iterator, TypeVar
 from urllib.parse import urlsplit
 
 import anyio
@@ -41,6 +41,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.requests import Request
+from starlette.types import Scope
 
 from ._version import VERSION
 from .auth import (
@@ -72,24 +73,43 @@ from .streamable_http import (
     StreamableHTTPConfig,
     RestartableStreamableHTTPApp,
 )
+from .participants import (
+    ParticipantStore,
+    ensure_participants_schema,
+    overview_to_dict,
+    parse_usage_report,
+)
 from .taskqueue import (
+    MAX_NOTE_BYTES,
+    MAX_NOTE_BYTES_PER_TASK,
+    MAX_NOTES_PER_TASK,
     TaskLeaseError,
+    TaskNote,
+    TaskNotActiveError,
     TaskNotFoundError,
+    TaskPermissionError,
+    TaskStateError,
     TaskStatus,
     TaskStore,
+    TaskWithNotes,
     ensure_taskqueue_schema,
+    note_to_dict,
+    notes_to_dicts,
     task_to_dict,
 )
+from .timestamps import parse_timestamp
 from .validation import (
     DEFAULT_LIMITS,
     BridgeValidationError,
     canonical_json,
+    loads_bounded_json,
     normalize_limit,
     validate_channel,
     validate_consumer,
     validate_idempotency_key,
     validate_non_negative_int,
     validate_raw_content,
+    validate_participant_name,
     validate_sender,
 )
 
@@ -128,12 +148,17 @@ MAX_SSE_SUBSCRIBERS = SETTINGS.max_sse_subscribers
 MAX_SSE_PER_CHANNEL = SETTINGS.max_sse_per_channel
 SSE_REPLAY_LIMIT = SETTINGS.sse_replay_limit
 
+# Participants per bridge_participants call (by default) and per /api/state.
+PARTICIPANT_LIST_LIMIT = 100
+
 # Message retention. 0 = keep forever (the default — the bridge is a transport,
 # not an archive, but a long-running host shouldn't grow SQLite without bound).
 # When > 0, a background sweep deletes messages whose timestamp is older than
 # `RETENTION_DAYS` days, every `RETENTION_SWEEP_SECONDS`. Opt-in, with a loud
 # startup banner, because it's the first feature that deletes historical state.
 RETENTION_DAYS = SETTINGS.retention_days
+# Participants that hold no task are forgotten after this many idle days; 0 keeps them.
+PARTICIPANT_IDLE_DAYS = SETTINGS.participant_idle_days
 RETENTION_SWEEP_SECONDS = SETTINGS.retention_sweep_seconds
 
 # Audit log. Off by default. When on, auth failures, oversize-body rejects,
@@ -163,6 +188,7 @@ _message_conditions: weakref.WeakKeyDictionary[
 ] = weakref.WeakKeyDictionary()
 _reliability: ReliabilityStore | None = None
 _taskstore: TaskStore | None = None
+_participantstore: ParticipantStore | None = None
 _task_conditions: weakref.WeakKeyDictionary[
     asyncio.AbstractEventLoop, asyncio.Condition
 ] = weakref.WeakKeyDictionary()
@@ -332,6 +358,7 @@ def db() -> sqlite3.Connection:
         )
         ensure_reliability_schema(_conn)
         ensure_taskqueue_schema(_conn)
+        ensure_participants_schema(_conn)
         # Early forward builds copied complete message bodies into the event
         # outbox. Live delivery can reconstruct a message from its source row,
         # so scrub those redundant privacy-sensitive copies during upgrade.
@@ -377,6 +404,15 @@ def task_store() -> TaskStore:
     return _taskstore
 
 
+def participant_store() -> ParticipantStore:
+    """Return the participant repository; callers own the write transaction."""
+    global _participantstore
+    conn = db()
+    if _participantstore is None or _participantstore.conn is not conn:
+        _participantstore = ParticipantStore(conn)
+    return _participantstore
+
+
 async def _begin_immediate(conn: sqlite3.Connection, attempts: int = 7) -> None:
     """Acquire SQLite's writer slot with bounded, non-blocking backoff."""
     for attempt in range(attempts):
@@ -395,7 +431,11 @@ async def _begin_immediate(conn: sqlite3.Connection, attempts: int = 7) -> None:
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return iso_z(datetime.now(timezone.utc))
+
+
+def iso_z(instant: datetime) -> str:
+    return instant.isoformat().replace("+00:00", "Z")
 
 
 def uptime_seconds() -> int:
@@ -413,9 +453,9 @@ def _is_json_str(s: str) -> bool:
     if not s or s[0] not in "{[":
         return False
     try:
-        json.loads(s)
+        loads_bounded_json(s)
         return True
-    except (ValueError, TypeError, RecursionError):
+    except (ValueError, TypeError):
         return False
 
 
@@ -811,6 +851,7 @@ async def insert_message_reliable(
                 (msg_id, channel, sender, encoded, ts),
             )
             seq = int(cur.lastrowid)
+            participant_store().touch(sender)
             event_cursor = conn.execute(
                 "INSERT INTO bridge_events(event_type, channel, message_id, source_instance, "
                 "payload, timestamp) VALUES ('message', ?, ?, ?, ?, ?)",
@@ -859,7 +900,8 @@ async def clear_channel(channel: str) -> int:
             conn.execute("DELETE FROM bridge_idempotency WHERE channel = ?", (channel,))
             # A channel reset also drops its task queue (same transaction, so a
             # cleared channel never leaves orphaned tasks behind).
-            conn.execute("DELETE FROM tasks WHERE channel = ?", (channel,))
+            task_store().delete_channel(channel=channel)
+            participant_store().reconcile_current_tasks()
             cur = conn.execute("DELETE FROM messages WHERE channel = ?", (channel,))
             count = cur.rowcount
             data = {"channel": channel, "cleared": count}
@@ -926,6 +968,54 @@ def _clamp_lease_seconds(value: int | None) -> int:
     return min(lease, MAX_LEASE_SECONDS)
 
 
+_T = TypeVar("_T")
+
+
+async def _write_transaction(operation: Callable[[], _T]) -> _T:
+    """Run a store operation as one committed write under the single-writer lock."""
+    conn = db()
+    async with _write_lock:
+        await _begin_immediate(conn)
+        try:
+            result = operation()
+            conn.commit()
+            return result
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+
+
+@contextmanager
+def _task_errors_as_validation() -> Iterator[None]:
+    """Report task-store failures as the structured errors MCP clients expect."""
+    try:
+        yield
+    except TaskNotFoundError as exc:
+        raise BridgeValidationError(
+            "task_id", "not_found", "does not exist in this channel"
+        ) from exc
+    except TaskLeaseError as exc:
+        raise BridgeValidationError(
+            "lease_token", "lost", "lease no longer held (expired or reclaimed)"
+        ) from exc
+    except TaskNotActiveError as exc:
+        raise BridgeValidationError(
+            "task_id", "not_active", "is no longer pending or claimed"
+        ) from exc
+    except TaskPermissionError as exc:
+        raise BridgeValidationError(
+            "sender", "forbidden", f"only the original enqueuer may {exc.action.value} a task"
+        ) from exc
+    except TaskStateError as exc:
+        raise BridgeValidationError(
+            "task_id",
+            "not_pending",
+            f"task is {exc.status.value}; "
+            f"only pending tasks can be {exc.action.past_participle}",
+        ) from exc
+
+
 async def enqueue_task_reliable(
     *,
     channel: str,
@@ -935,51 +1025,59 @@ async def enqueue_task_reliable(
     delay_seconds: int = 0,
     idempotency_key: str | None = None,
     enqueued_by: str | None = None,
+    title: str | None = None,
 ):
-    conn = db()
-    async with _write_lock:
-        await _begin_immediate(conn)
-        try:
-            result = task_store().enqueue(
-                channel=channel,
-                payload=payload,
-                priority=priority,
-                max_attempts=(
-                    DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
-                ),
-                delay_seconds=delay_seconds,
-                idempotency_key=idempotency_key,
-                enqueued_by=enqueued_by,
-            )
-            conn.commit()
-        except BaseException:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+    result = await _write_transaction(
+        lambda: task_store().enqueue(
+            channel=channel,
+            payload=payload,
+            priority=priority,
+            max_attempts=(
+                DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
+            ),
+            delay_seconds=delay_seconds,
+            idempotency_key=idempotency_key,
+            enqueued_by=enqueued_by,
+            title=title,
+        )
+    )
     if result.created:
         await _notify_task_waiters()
     return result
 
 
-async def _claim_task_once(*, channel: str, consumer: str, lease_seconds: int):
-    conn = db()
-    async with _write_lock:
-        await _begin_immediate(conn)
-        try:
-            task = task_store().claim(
-                channel=channel, consumer=consumer, lease_seconds=lease_seconds
-            )
-            conn.commit()
-            return task
-        except BaseException:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+async def _claim_task_once(
+    *, channel: str, consumer: str, lease_seconds: int, record_empty_poll: bool
+):
+    def claim_and_record_presence():
+        task = task_store().claim(
+            channel=channel, consumer=consumer, lease_seconds=lease_seconds
+        )
+        participants = participant_store()
+        if task is not None:
+            participants.start_task(consumer, channel=channel, task_id=task.id)
+        elif record_empty_poll:
+            participants.touch(consumer)
+        participants.reconcile_current_tasks()
+        if task is None:
+            return None
+        # The claim cursor covers every note so far; the worker gets them all.
+        return TaskWithNotes(task, task_store().all_notes(task))
+
+    return await _write_transaction(claim_and_record_presence)
+
+
+def _record_task_resolution(task) -> None:
+    """After complete/fail: the worker was active and no longer holds the task."""
+    participants = participant_store()
+    if task.worked_by is not None:  # A lease taken before worked_by existed.
+        participants.touch(task.worked_by)
+    participants.reconcile_current_tasks()
 
 
 async def claim_task_waiting(
     *, channel: str, consumer: str, lease_seconds: int, wait_seconds: float
-):
+) -> TaskWithNotes | None:
     """Claim the oldest eligible task, optionally long-polling for one.
 
     Attempts a claim, then (if the queue was empty and ``wait_seconds`` > 0)
@@ -987,11 +1085,14 @@ async def claim_task_waiting(
     ≤1s recheck for a cross-process one or a just-available delayed task — and
     retries until the deadline.
     """
-    task = await _claim_task_once(
-        channel=channel, consumer=consumer, lease_seconds=lease_seconds
+    claimed = await _claim_task_once(
+        channel=channel,
+        consumer=consumer,
+        lease_seconds=lease_seconds,
+        record_empty_poll=True,
     )
-    if task is not None or wait_seconds <= 0:
-        return task
+    if claimed is not None or wait_seconds <= 0:
+        return claimed
     wait_seconds = max(0.0, min(float(wait_seconds), 55.0))
     deadline = asyncio.get_running_loop().time() + wait_seconds
     while True:
@@ -1004,32 +1105,28 @@ async def claim_task_waiting(
                 await asyncio.wait_for(condition.wait(), timeout=min(remaining, 1.0))
             except asyncio.TimeoutError:
                 pass
-        task = await _claim_task_once(
-            channel=channel, consumer=consumer, lease_seconds=lease_seconds
+        # Long-poll retries skip the presence write; the first attempt recorded it.
+        claimed = await _claim_task_once(
+            channel=channel,
+            consumer=consumer,
+            lease_seconds=lease_seconds,
+            record_empty_poll=False,
         )
-        if task is not None:
-            return task
+        if claimed is not None:
+            return claimed
 
 
 async def complete_task_reliable(
     *, channel: str, task_id: str, lease_token: str, result: str | None = None
 ):
-    conn = db()
-    async with _write_lock:
-        await _begin_immediate(conn)
-        try:
-            task = task_store().complete(
-                channel=channel,
-                task_id=task_id,
-                lease_token=lease_token,
-                result=result,
-            )
-            conn.commit()
-            return task
-        except BaseException:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+    def complete_and_record():
+        task = task_store().complete(
+            channel=channel, task_id=task_id, lease_token=lease_token, result=result
+        )
+        _record_task_resolution(task)
+        return TaskWithNotes(task, task_store().unread_notes(task))
+
+    return await _write_transaction(complete_and_record)
 
 
 async def fail_task_reliable(
@@ -1041,26 +1138,88 @@ async def fail_task_reliable(
     error: str | None = None,
     retry_delay_seconds: int = 0,
 ):
-    conn = db()
-    async with _write_lock:
-        await _begin_immediate(conn)
-        try:
-            task = task_store().fail(
-                channel=channel,
-                task_id=task_id,
-                lease_token=lease_token,
-                requeue=requeue,
-                error=error,
-                retry_delay_seconds=retry_delay_seconds,
-            )
-            conn.commit()
-        except BaseException:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+    def fail_and_record():
+        task = task_store().fail(
+            channel=channel,
+            task_id=task_id,
+            lease_token=lease_token,
+            requeue=requeue,
+            error=error,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+        _record_task_resolution(task)
+        return TaskWithNotes(task, task_store().unread_notes(task))
+
+    outcome = await _write_transaction(fail_and_record)
     # A requeued task is claimable again; wake any waiting workers.
-    if task.status is TaskStatus.PENDING:
+    if outcome.task.status is TaskStatus.PENDING:
         await _notify_task_waiters()
+    return outcome
+
+
+async def add_task_note_reliable(
+    *, channel: str, task_id: str, sender: str, content: str
+) -> TaskNote:
+    # No waiter wake-up: claim long-polls wait for new tasks, and a note adds none.
+    def add_and_record():
+        note = task_store().add_note(
+            channel=channel, task_id=task_id, sender=sender, content=content
+        )
+        participant_store().touch(note.sender)
+        return note
+
+    return await _write_transaction(add_and_record)
+
+
+async def take_task_notes_reliable(
+    *, channel: str, task_id: str, lease_token: str
+) -> list[TaskNote]:
+    return await _write_transaction(
+        lambda: task_store().take_new_notes(
+            channel=channel, task_id=task_id, lease_token=lease_token
+        )
+    )
+
+
+def _notes_text(heading: str, notes: list[TaskNote]) -> str:
+    """Text-output lines for notes, prefixed by a newline; empty for no notes."""
+    if not notes:
+        return ""
+    heading_line = f"  {heading} ({len(notes)}):"
+    note_lines = [
+        f"  [{n.seq}] {n.sender} @ {n.created_at}: {_indented(n.content)}" for n in notes
+    ]
+    return "\n" + "\n".join([heading_line, *note_lines])
+
+
+def _indented(text: str) -> str:
+    # Continuation lines sit deeper than any output field, so a note cannot fake one.
+    return "\n      | ".join(text.splitlines())
+
+
+async def replace_task_reliable(
+    *,
+    channel: str,
+    task_id: str,
+    sender: str,
+    payload: str,
+    priority: int | None = None,
+    delay_seconds: int | None = None,
+    title: str | None = None,
+):
+    task = await _write_transaction(
+        lambda: task_store().replace(
+            channel=channel,
+            task_id=task_id,
+            sender=sender,
+            payload=payload,
+            priority=priority,
+            delay_seconds=delay_seconds,
+            title=title,
+        )
+    )
+    # A new priority or delay can make the task claimable now; wake waiters.
+    await _notify_task_waiters()
     return task
 
 
@@ -1074,7 +1233,7 @@ def _retention_cutoff_iso(days: int, now: datetime | None = None) -> str:
     """The ISO timestamp `days` before `now`. Same `...Z` UTC shape as stored
     timestamps so a plain string comparison in SQL is a correct time compare."""
     base = now or datetime.now(timezone.utc)
-    return (base - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+    return iso_z(base - timedelta(days=days))
 
 
 async def delete_messages_before(cutoff_iso: str) -> int:
@@ -1137,9 +1296,15 @@ async def housekeeping_sweep_once() -> tuple[int, int, int, int, int]:
             # timeout so abandoned work is retried even when no one is claiming,
             # and prune finished tasks under the message retention window.
             task_sweep = task_store().requeue_expired(limit=10_000)
+            task_store().delete_orphan_notes()
+            participant_store().reconcile_current_tasks()
             if RETENTION_DAYS > 0:
                 task_store().prune_terminal(
                     older_than_iso=_retention_cutoff_iso(RETENTION_DAYS), limit=10_000
+                )
+            if PARTICIPANT_IDLE_DAYS > 0:
+                participant_store().prune_idle(
+                    last_seen_before=_retention_cutoff_iso(PARTICIPANT_IDLE_DAYS)
                 )
             conn.commit()
         except BaseException:
@@ -1222,6 +1387,12 @@ mcp_http = RestartableStreamableHTTPApp(
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     object_output = {"type": "object", "additionalProperties": True}
+    title_input = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120,
+        "description": "Short task title; derived from the payload when omitted",
+    }
     return [
         Tool(
             name="bridge_send",
@@ -1448,6 +1619,7 @@ async def list_tools() -> list[Tool]:
                         "maxLength": 256,
                     },
                     "enqueued_by": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "title": title_input,
                 },
                 "required": ["channel"],
                 "oneOf": [
@@ -1561,6 +1733,52 @@ async def list_tools() -> list[Tool]:
             ),
         ),
         Tool(
+            name="bridge_replace",
+            description=(
+                "Replace the payload of a pending task in place (same task_id and "
+                "queue position). Only the original enqueuer (sender must equal "
+                "enqueued_by) may replace, and only before a worker claims it. "
+                "Resets attempts; tasks enqueued without enqueued_by cannot be replaced."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "task_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "sender": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "payload": {"description": "Structured JSON task payload"},
+                    "content": {"type": "string", "description": "String task payload"},
+                    "priority": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 2147483647,
+                        "description": "New priority; omit to keep the current one",
+                    },
+                    "delay_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1000000000,
+                        "description": "New delay from now; omit to keep the current one",
+                    },
+                    "title": title_input,
+                },
+                "required": ["channel", "task_id", "sender"],
+                "oneOf": [
+                    {"required": ["payload"], "not": {"required": ["content"]}},
+                    {"required": ["content"], "not": {"required": ["payload"]}},
+                ],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Replace task",
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
             name="bridge_tasks",
             description=(
                 "Inspect a channel's task queue: per-status counts plus a recent "
@@ -1598,6 +1816,94 @@ async def list_tools() -> list[Tool]:
                 openWorldHint=False,
             ),
         ),
+        Tool(
+            name="bridge_task_note",
+            description=(
+                "Attach a note to a pending or claimed task, e.g. a correction for "
+                "the worker. The worker gets every note at bridge_claim, new ones "
+                "via bridge_task_notes, and unread ones in bridge_complete and "
+                "bridge_fail output. A finished task rejects notes. Limits: "
+                f"{MAX_NOTE_BYTES // 1024} KiB per note, {MAX_NOTE_BYTES_PER_TASK // 1024} "
+                f"KiB and {MAX_NOTES_PER_TASK} notes per task."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1},
+                    "task_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "sender": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "content": {"type": "string", "minLength": 1},
+                },
+                "required": ["channel", "task_id", "sender", "content"],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Note task",
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
+            name="bridge_task_notes",
+            description=(
+                "Read the notes sent to a claimed task since this lease last read "
+                "them, and mark them read. Requires the lease_token from bridge_claim."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1},
+                    "task_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "lease_token": {"type": "string", "minLength": 1, "maxLength": 256},
+                },
+                "required": ["channel", "task_id", "lease_token"],
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="Read task notes",
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        Tool(
+            name="bridge_participants",
+            description=(
+                "List bridge participants (senders and task consumers), newest first, "
+                "up to limit, with the same data as the dashboard: presence "
+                "(online/idle/offline), the live task (id, title, claimed_since) and its "
+                "channel, open_tasks (tasks it enqueued that are not finished) and its "
+                "latest Claude usage: the 5 h session and weekly windows (used_pct, "
+                "resets_at), reported_at and stale_at. Use it to check the workers' "
+                "usage and pick the one with the most headroom. Usage comes from each "
+                "session's statusLine reporter; null means not reported, and a report "
+                "past stale_at is stale. Names are self-declared. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 500,
+                        "default": PARTICIPANT_LIST_LIMIT,
+                    },
+                },
+                "additionalProperties": False,
+            },
+            outputSchema=object_output,
+            annotations=ToolAnnotations(
+                title="List participants",
+                readOnlyHint=True,
+                destructiveHint=False,
+                openWorldHint=False,
+            ),
+        ),
     ]
 
 
@@ -1621,6 +1927,12 @@ def _format_message_rows(channel: str, rows: list[sqlite3.Row]) -> str:
         lines.append(message["content"])
         lines.append("")
     return f"[{channel}] — {len(rows)} message(s)\n" + "\n".join(lines).rstrip()
+
+
+def _task_payload(arguments: dict[str, Any]) -> str:
+    if "payload" in arguments:
+        return canonical_json(arguments["payload"], field="payload")
+    return arguments["content"]
 
 
 async def dispatch_tool(
@@ -1877,18 +2189,15 @@ async def dispatch_tool(
     # ── bridge_enqueue ───────────────────────────────────────────────────────
     elif name == "bridge_enqueue":
         channel = validate_channel(arguments["channel"])
-        if "payload" in arguments:
-            payload = canonical_json(arguments["payload"], field="payload")
-        else:
-            payload = arguments["content"]
         outcome = await enqueue_task_reliable(
             channel=channel,
-            payload=payload,
+            payload=_task_payload(arguments),
             priority=arguments.get("priority", 0),
             max_attempts=arguments.get("max_attempts"),
             delay_seconds=arguments.get("delay_seconds", 0),
             idempotency_key=arguments.get("idempotency_key"),
             enqueued_by=arguments.get("enqueued_by"),
+            title=arguments.get("title"),
         )
         task = outcome.task
         verb = "Enqueued" if outcome.created else "Deduplicated (existing)"
@@ -1903,28 +2212,35 @@ async def dispatch_tool(
         channel = validate_channel(arguments["channel"])
         consumer = validate_consumer(arguments["consumer"])
         lease_seconds = _clamp_lease_seconds(arguments.get("lease_seconds"))
-        task = await claim_task_waiting(
+        claimed = await claim_task_waiting(
             channel=channel,
             consumer=consumer,
             lease_seconds=lease_seconds,
             wait_seconds=arguments.get("wait_seconds", 0),
         )
-        if task is None:
+        if claimed is None:
             return _tool_output(
                 f"No task available on [{channel}]",
                 {"channel": channel, "task": None},
                 structured=structured,
             )
+        task, notes = claimed.task, claimed.notes
         # The lease_token is returned only to the claiming worker; it fences a
         # later complete/fail and is otherwise omitted from task views.
         return _tool_output(
             f"✓ Claimed task {task.id} on [{channel}] "
             f"(attempt {task.attempts}/{task.max_attempts}, "
             f"lease until {task.lease_expires_at})\n"
-            f"  lease_token: {task.lease_token}",
+            f"  title: {task.title or '—'}\n"
+            f"  lease_token: {task.lease_token}"
+            + _notes_text("notes", notes),
             {
                 "channel": channel,
-                "task": {**task_to_dict(task), "lease_token": task.lease_token},
+                "task": {
+                    **task_to_dict(task),
+                    "lease_token": task.lease_token,
+                    "notes": notes_to_dicts(notes),
+                },
             },
             structured=structured,
         )
@@ -1935,32 +2251,29 @@ async def dispatch_tool(
         result_payload = None
         if arguments.get("result") is not None:
             result_payload = canonical_json(arguments["result"], field="result")
-        try:
-            task = await complete_task_reliable(
+        with _task_errors_as_validation():
+            outcome = await complete_task_reliable(
                 channel=channel,
                 task_id=arguments["task_id"],
                 lease_token=arguments["lease_token"],
                 result=result_payload,
             )
-        except TaskNotFoundError as exc:
-            raise BridgeValidationError(
-                "task_id", "not_found", "does not exist in this channel"
-            ) from exc
-        except TaskLeaseError as exc:
-            raise BridgeValidationError(
-                "lease_token", "lost", "lease no longer held (expired or reclaimed)"
-            ) from exc
+        task, unread = outcome.task, outcome.notes
         return _tool_output(
-            f"✓ Completed task {task.id} on [{channel}]",
-            task_to_dict(task, include_payload=False),
+            f"✓ Completed task {task.id} on [{channel}]"
+            + _notes_text("unread notes", unread),
+            {
+                **task_to_dict(task, include_payload=False),
+                "unread_notes": notes_to_dicts(unread),
+            },
             structured=structured,
         )
 
     # ── bridge_fail ──────────────────────────────────────────────────────────
     elif name == "bridge_fail":
         channel = validate_channel(arguments["channel"])
-        try:
-            task = await fail_task_reliable(
+        with _task_errors_as_validation():
+            outcome = await fail_task_reliable(
                 channel=channel,
                 task_id=arguments["task_id"],
                 lease_token=arguments["lease_token"],
@@ -1968,18 +2281,34 @@ async def dispatch_tool(
                 error=arguments.get("error"),
                 retry_delay_seconds=arguments.get("retry_delay_seconds", 0),
             )
-        except TaskNotFoundError as exc:
-            raise BridgeValidationError(
-                "task_id", "not_found", "does not exist in this channel"
-            ) from exc
-        except TaskLeaseError as exc:
-            raise BridgeValidationError(
-                "lease_token", "lost", "lease no longer held (expired or reclaimed)"
-            ) from exc
+        task, unread = outcome.task, outcome.notes
         disposition = "requeued" if task.status is TaskStatus.PENDING else "dead-lettered"
         return _tool_output(
             f"✓ Failed task {task.id} on [{channel}] "
-            f"({disposition}, attempt {task.attempts}/{task.max_attempts})",
+            f"({disposition}, attempt {task.attempts}/{task.max_attempts})"
+            + _notes_text("unread notes", unread),
+            {
+                **task_to_dict(task, include_payload=False),
+                "unread_notes": notes_to_dicts(unread),
+            },
+            structured=structured,
+        )
+
+    # ── bridge_replace ───────────────────────────────────────────────────────
+    elif name == "bridge_replace":
+        channel = validate_channel(arguments["channel"])
+        with _task_errors_as_validation():
+            task = await replace_task_reliable(
+                channel=channel,
+                task_id=arguments["task_id"],
+                sender=arguments["sender"],
+                payload=_task_payload(arguments),
+                priority=arguments.get("priority"),
+                delay_seconds=arguments.get("delay_seconds"),
+                title=arguments.get("title"),
+            )
+        return _tool_output(
+            f"✓ Replaced task {task.id} on [{channel}] (status {task.status.value})",
             task_to_dict(task, include_payload=False),
             structured=structured,
         )
@@ -2001,6 +2330,7 @@ async def dispatch_tool(
         for t in tasks:
             lines.append(
                 f"  {t.id} · {t.status.value} · attempt {t.attempts}/{t.max_attempts}"
+                + (f" · {t.title}" if t.title else "")
             )
         return _tool_output(
             "\n".join(lines),
@@ -2010,6 +2340,56 @@ async def dispatch_tool(
                 "tasks": [task_to_dict(t, include_payload=False) for t in tasks],
             },
             structured=structured,
+        )
+
+    # ── bridge_task_note ─────────────────────────────────────────────────────
+    elif name == "bridge_task_note":
+        with _task_errors_as_validation():
+            note = await add_task_note_reliable(
+                channel=arguments["channel"],
+                task_id=arguments["task_id"],
+                sender=arguments["sender"],
+                content=arguments["content"],
+            )
+        return _tool_output(
+            f"✓ Noted task {note.task_id} on [{note.channel}] (note seq {note.seq})",
+            {"channel": note.channel, **note_to_dict(note)},
+            structured=structured,
+        )
+
+    # ── bridge_task_notes ────────────────────────────────────────────────────
+    elif name == "bridge_task_notes":
+        with _task_errors_as_validation():
+            notes = await take_task_notes_reliable(
+                channel=arguments["channel"],
+                task_id=arguments["task_id"],
+                lease_token=arguments["lease_token"],
+            )
+        if notes:
+            text = f"Task {arguments['task_id']}" + _notes_text("new notes", notes)
+        else:
+            text = f"No new notes on task {arguments['task_id']}"
+        return _tool_output(
+            text,
+            {
+                "channel": arguments["channel"],
+                "task_id": arguments["task_id"],
+                "notes": notes_to_dicts(notes),
+            },
+            structured=structured,
+        )
+
+    # ── bridge_participants ──────────────────────────────────────────────────
+    elif name == "bridge_participants":
+        now = datetime.now(timezone.utc)
+        limit = normalize_limit(
+            arguments.get("limit"), default=PARTICIPANT_LIST_LIMIT, maximum=500
+        )
+        participants = _participants_state(now, limit=limit)
+        lines = [f"{len(participants)} participant(s)"]
+        lines += [f"  {_participant_line(entry, now)}" for entry in participants]
+        return _tool_output(
+            "\n".join(lines), {"participants": participants}, structured=structured
         )
 
     raise ValueError(f"Unknown tool: {name}")
@@ -2062,6 +2442,8 @@ async def api_state(request: Request) -> JSONResponse:
             "senders": senders,
         })
     up = uptime_seconds()
+    # One clock read, so ages derived from server_time match the presence colours.
+    now = datetime.now(timezone.utc)
     return JSONResponse({
         "service": "claude-bridge",
         "status": "online",
@@ -2074,8 +2456,72 @@ async def api_state(request: Request) -> JSONResponse:
         "sse_dropped_events": _dropped_events_total,
         "retention_days": RETENTION_DAYS,
         "audit_enabled": AUDIT_ENABLED,
-        "server_time": utc_now_iso(),
+        "server_time": iso_z(now),
+        "participants": _participants_state(now),
     })
+
+
+def _participants_state(now: datetime, *, limit: int = PARTICIPANT_LIST_LIMIT) -> list[dict]:
+    overviews = participant_store().list_overview(limit=limit, now=now)
+    return [overview_to_dict(overview, now) for overview in overviews]
+
+
+def _participant_line(entry: dict, now: datetime) -> str:
+    """One text line from a _participants_state entry: presence, usage, then work."""
+    return " · ".join([
+        entry["name"],
+        entry["presence"],
+        *_usage_fields(entry["usage"], now),
+        _task_field(entry),
+        *_open_tasks_fields(entry["open_tasks"]),
+    ])
+
+
+def _open_tasks_fields(open_tasks: int) -> list[str]:
+    return [f"{open_tasks} enqueued task(s) open"] if open_tasks else []
+
+
+def _usage_fields(usage: dict | None, now: datetime) -> list[str]:
+    if usage is None:
+        return ["usage: not reported"]
+    windows = [
+        _usage_window_field("5h", usage["session"], _clock_time),
+        _usage_window_field("wk", usage["weekly"], _calendar_date),
+    ]
+    return [*filter(None, windows), _usage_age_field(usage, now)]
+
+
+def _usage_window_field(
+    label: str, window: dict | None, reset_text: Callable[[str], str]
+) -> str | None:
+    if window is None:
+        return None
+    field = f"{label} {window['used_pct']:.0f}%"
+    if window["resets_at"]:
+        field += f" (resets {reset_text(window['resets_at'])})"
+    return field
+
+
+def _clock_time(stamp: str) -> str:
+    return f"{stamp[11:16]}Z"  # Stored resets are UTC: "...T01:20:00.000000Z" -> "01:20Z".
+
+
+def _calendar_date(stamp: str) -> str:
+    return stamp[:10]
+
+
+def _usage_age_field(usage: dict, now: datetime) -> str:
+    age = now - parse_timestamp(usage["reported_at"])
+    stale = " (stale)" if now > parse_timestamp(usage["stale_at"]) else ""
+    return f"usage {max(0, int(age.total_seconds() // 60))} min old{stale}"
+
+
+def _task_field(entry: dict) -> str:
+    task = entry["current_task"]
+    if task is None:
+        return "no task"
+    label = f"{task['title']} ({task['id']})" if task["title"] else task["id"]
+    return f"task {label} on [{entry['current_channel']}]"
 
 
 async def api_messages(request: Request) -> JSONResponse:
@@ -2176,7 +2622,7 @@ async def api_message_detail(request: Request) -> JSONResponse:
     parsed = None
     if is_json:
         try:
-            parsed = json.loads(content)
+            parsed = loads_bounded_json(content)
         except (ValueError, TypeError):
             parsed = None
     protocol_message = parse_message_content(content)
@@ -2370,6 +2816,29 @@ async def api_ack(request: Request) -> JSONResponse:
         "updated_at": cursor.updated_at,
         "advanced": result.advanced,
     })
+
+
+async def api_participant_usage(request: Request) -> JSONResponse:
+    """Store a participant's latest Claude usage report (rate-limit windows)."""
+    try:
+        body = await request.json()
+    except (ValueError, TypeError, RecursionError) as exc:
+        return _invalid_json_response(exc)
+    try:
+        name = validate_participant_name(request.path_params["name"])
+        report = parse_usage_report(body)
+        reported_at = await _write_transaction(
+            lambda: participant_store().report_usage(name, report)
+        )
+    except BridgeBusyError:
+        return JSONResponse(
+            {"error": "bridge database is busy; retry the operation"},
+            status_code=503,
+            headers={"Retry-After": "1"},
+        )
+    except BridgeValidationError as exc:
+        return JSONResponse({"error": str(exc), **exc.as_dict()}, status_code=400)
+    return JSONResponse({"name": name, "usage_reported_at": reported_at})
 
 
 def _request_is_https(scheme: str, headers) -> bool:
@@ -2696,15 +3165,38 @@ _routes = [
     Route("/api/clear", endpoint=api_clear, methods=["POST"]),
     Route("/api/session", endpoint=api_session, methods=["GET", "POST", "DELETE"]),
     Route("/api/audit", endpoint=api_audit),
+    Route(
+        "/api/participants/{name:path}/usage",
+        endpoint=api_participant_usage,
+        methods=["POST"],
+    ),
     Route("/events/channel/{channel:path}", endpoint=sse_channel),
     Route("/mcp", endpoint=mcp_http),
     Route("/sse", endpoint=handle_sse),
     Mount("/messages/", app=handle_post_message),
 ]
+
+
+class RevalidatingStaticFiles(StaticFiles):
+    """Static files that browsers revalidate on every load (ETag keeps it a cheap 304)."""
+
+    def file_response(
+        self,
+        full_path: str | os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        # Also set on the 304; without it browsers keep a stale app.js after a deploy.
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 if os.path.isdir(WEB_DIR) and not SETTINGS.no_dashboard:
     # Catch-all static mount goes LAST so it doesn't shadow API routes.
     # html=True makes "/" serve index.html.
-    _routes.append(Mount("/", app=StaticFiles(directory=WEB_DIR, html=True)))
+    _routes.append(Mount("/", app=RevalidatingStaticFiles(directory=WEB_DIR, html=True)))
 
 _cors_kwargs: dict[str, object] = {
     "allow_origins": CORS_EXTRA_ORIGINS,
@@ -2761,6 +3253,7 @@ app = Starlette(
                 "/api/send",
                 "/api/ack",
                 "/api/clear",
+                "/api/participants/",
                 "/messages/",
                 "/mcp",
             ),

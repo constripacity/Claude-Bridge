@@ -8,10 +8,18 @@ import {
   HighlightedJson,
   Icon,
   LiveDot,
+  ParticipantRow,
   SenderPill,
+  TRUNCATE,
+  fmtTs,
+  presenceSummary,
+  serverNowMs,
 } from './shared.jsx';
 
-function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
+// Keeps one long channel chip from filling the whole scroll strip.
+const CHIP_LABEL_MAX_WIDTH = '60vw';
+
+function MobileHeader({ state, channels, activeId, onSelect, onNewChannel, authControl }) {
   return (
     <div style={{
       background: 'var(--bg-deep)',
@@ -23,19 +31,22 @@ function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
         display: 'flex', alignItems: 'center', gap: 10,
       }}>
         <BridgeMark size={20} color="var(--blue)" />
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-            letterSpacing: '0.22em', color: 'var(--text)',
+            letterSpacing: '0.22em', color: 'var(--text)', ...TRUNCATE,
           }}>CLAUDE&nbsp;BRIDGE</div>
           <div style={{
             fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
             marginTop: 2, display: 'flex', alignItems: 'center', gap: 6,
           }}>
             <LiveDot color="var(--green)" size={5} />
-            <span>online · :8765 · {state?.uptime_human || '00:00:00'}</span>
+            <span style={TRUNCATE}>
+              online · :8765 · {state?.uptime_human || '00:00:00'}
+            </span>
           </div>
         </div>
+        {authControl}
       </div>
 
       <div style={{
@@ -54,10 +65,11 @@ function MobileHeader({ state, channels, activeId, onSelect, onNewChannel }) {
               cursor: 'pointer',
             }}>
               <Icon name="hash" size={10} color={active ? 'var(--blue)' : 'var(--text-dim)'} />
-              <span style={{
+              <span title={c.id} style={{
                 fontFamily: 'var(--mono)', fontSize: 11,
                 color: active ? 'var(--text)' : 'var(--text-mid)',
                 fontWeight: active ? 500 : 400,
+                maxWidth: CHIP_LABEL_MAX_WIDTH, ...TRUNCATE,
               }}>{c.id}</span>
               <span style={{
                 fontFamily: 'var(--mono)', fontSize: 9,
@@ -126,7 +138,7 @@ function MobileMessageRow({ m, selected, onSelect }) {
       <div style={{
         fontFamily: 'var(--mono)', fontSize: 11,
         color: selected ? 'var(--text)' : 'var(--text-mid)',
-        lineHeight: 1.45,
+        lineHeight: 1.45, overflowWrap: 'anywhere',
         display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3,
         overflow: 'hidden',
       }}>{m.preview}</div>
@@ -223,6 +235,37 @@ function MobileSheet({ detail, channel, defaultSender, onSend }) {
   );
 }
 
+// Collapsed by default: one summary line, so the message feed keeps its room.
+function MobileParticipants({ state }) {
+  const [open, setOpen] = React.useState(false);
+  const participants = state?.participants || [];
+  const nowMs = serverNowMs(state);
+  return (
+    <div style={{ borderBottom: '1px solid var(--hairline)', background: 'var(--bg-base)' }}>
+      <button onClick={() => setOpen(!open)} style={{
+        width: '100%', padding: '8px 16px', background: 'transparent', border: 0,
+        display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+        fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+      }}>
+        <Eyebrow>Participants</Eyebrow>
+        <span style={{ color: 'var(--text-faint)', ...TRUNCATE }}>
+          {presenceSummary(participants)}
+        </span>
+        <span style={{ marginLeft: 'auto', transform: open ? 'rotate(180deg)' : 'none' }}>
+          <Icon name="chev" size={10} color="var(--text-dim)" />
+        </span>
+      </button>
+      {open && (
+        <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+          {participants.map(p => (
+            <ParticipantRow key={p.name} p={p} nowMs={nowMs} compact />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardMobile(props) {
   const channelMeta = props.channelMeta;
   return (
@@ -240,7 +283,9 @@ function DashboardMobile(props) {
         onNewChannel={props.onNewChannel}
         activeId={props.activeChannel}
         onSelect={props.onSelectChannel}
+        authControl={props.authControl}
       />
+      <MobileParticipants state={props.state} />
 
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
@@ -249,12 +294,12 @@ function DashboardMobile(props) {
         borderBottom: '1px solid var(--hairline)',
       }}>
         <Icon name="hash" size={12} color="var(--blue)" />
-        <span style={{
+        <span title={props.activeChannel} style={{
           fontFamily: 'var(--mono)', fontSize: 12,
-          color: 'var(--text)', fontWeight: 500,
+          color: 'var(--text)', fontWeight: 500, ...TRUNCATE,
         }}>{props.activeChannel || '— no channel —'}</span>
         <span style={{
-          marginLeft: 'auto',
+          marginLeft: 'auto', flexShrink: 0, whiteSpace: 'nowrap',
           fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)',
         }}>{channelMeta?.count ?? 0} msgs</span>
       </div>

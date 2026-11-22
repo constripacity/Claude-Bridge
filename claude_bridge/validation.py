@@ -32,6 +32,7 @@ class ValidationLimits:
     max_sender_chars: int = 128
     max_consumer_chars: int = 128
     max_reference_chars: int = 256
+    max_title_chars: int = 120
     max_idempotency_key_chars: int = 256
     max_message_type_chars: int = 64
     max_message_bytes: int = 128 * 1024
@@ -59,6 +60,12 @@ class BridgeValidationError(ValueError):
 
 _MESSAGE_TYPE_RE = re.compile(r"^[a-z][a-z0-9._-]*$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+# Optional closing quote: an unterminated string must match once, not retry per quote.
+_JSON_STRING_RE = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"?', re.DOTALL)
+_NON_BRACKET_RE = re.compile(r"[^\[\]{}]+")
+
+# Generous ceiling for JSON that no tighter ValidationLimits field covers.
+GENERAL_JSON_MAX_DEPTH = 128
 
 
 def _require_string(value: Any, field: str) -> str:
@@ -103,8 +110,19 @@ def validate_sender(value: Any, limits: ValidationLimits = DEFAULT_LIMITS) -> st
     return _validate_identity(value, "sender", limits.max_sender_chars)
 
 
+def validate_participant_name(
+    value: Any, limits: ValidationLimits = DEFAULT_LIMITS
+) -> str:
+    # A participant is a sender or a consumer; both share one length bound.
+    return _validate_identity(value, "name", limits.max_sender_chars)
+
+
 def validate_consumer(value: Any, limits: ValidationLimits = DEFAULT_LIMITS) -> str:
     return _validate_identity(value, "consumer_id", limits.max_consumer_chars)
+
+
+def validate_title(value: Any, limits: ValidationLimits = DEFAULT_LIMITS) -> str:
+    return _validate_identity(value, "title", limits.max_title_chars)
 
 
 def validate_reference(
@@ -243,8 +261,29 @@ def canonical_json(value: Any, *, field: str = "value") -> str:
 
     # This general helper has a generous recursion ceiling. Public protocol
     # boundaries apply their tighter ValidationLimits before calling it.
-    _validate_json_tree(value, field=field, max_depth=128)
+    _validate_json_tree(value, field=field, max_depth=GENERAL_JSON_MAX_DEPTH)
     return _encode_json(value, field=field)
+
+
+def _exceeds_json_depth(raw: str, max_depth: int) -> bool:
+    brackets = _NON_BRACKET_RE.sub("", _JSON_STRING_RE.sub("", raw))
+    depth = 0
+    for bracket in brackets:
+        depth += 1 if bracket in "[{" else -1
+        if depth > max_depth:
+            return True
+    return False
+
+
+def loads_bounded_json(raw: str, *, max_depth: int = GENERAL_JSON_MAX_DEPTH) -> Any:
+    """Parse JSON text, but raise ValueError past ``max_depth`` nested arrays/objects.
+
+    The interpreter's recursion limit differs per Python version; this limit does not.
+    """
+
+    if _exceeds_json_depth(raw, max_depth):
+        raise ValueError(f"JSON is nested more than {max_depth} levels")
+    return json.loads(raw)
 
 
 def validate_json_value(
@@ -326,8 +365,10 @@ def validate_finite_number(value: Any, field: str) -> float:
 __all__ = [
     "BridgeValidationError",
     "DEFAULT_LIMITS",
+    "GENERAL_JSON_MAX_DEPTH",
     "ValidationLimits",
     "canonical_json",
+    "loads_bounded_json",
     "normalize_limit",
     "validate_channel",
     "validate_consumer",
@@ -338,6 +379,8 @@ __all__ = [
     "validate_non_negative_int",
     "validate_raw_content",
     "validate_reference",
+    "validate_participant_name",
     "validate_sender",
+    "validate_title",
     "validate_sha256",
 ]

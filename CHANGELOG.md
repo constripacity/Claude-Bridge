@@ -4,6 +4,58 @@ Notable changes to Claude Bridge. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases use semantic
 versioning where the Python packaging format allows.
 
+## [Unreleased]
+
+### Added
+
+- **Task notes.** `bridge_task_note` attaches a note to a pending or claimed
+  task, so an orchestrator can correct a task without a new one. The worker
+  gets every note at `bridge_claim` (`task.notes`), new ones with
+  `bridge_task_notes` (fenced by the `lease_token`), and unread ones in the
+  `bridge_complete`/`bridge_fail` output (`unread_notes`). A requeued task gives
+  the next worker all notes. A finished task rejects notes (`not_active`).
+  Notes are bounded so a claim stays small: 16 KiB per note, 64 KiB and 100 notes
+  per task.
+- **Ownership history.** Every task view now has `worked_by`, the last consumer
+  that claimed the task. Unlike `lease_owner` it is kept after the task ends.
+- **Participants.** `bridge_participants` lists every sender and consumer with
+  the same entries as `/api/state`: presence, the live task, open tasks and the
+  latest usage report (one text line each, with stale reports marked). Names are
+  self-declared (one shared bearer token), so this is a presence hint, not an
+  identity. It returns the newest 100 by default (`limit`, max 500). Participants
+  that hold no task are pruned after `CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS` (default
+  7, `0` keeps them), independent of message retention.
+- Schema: new `task_notes` and `participants` tables and the `tasks` columns
+  `worked_by` and `notes_read_seq`. An older database upgrades in place at
+  startup; the task-queue schema version stays 1, so a 1.3.0 server can still
+  open the upgraded database.
+- Rollback note: a 1.3.0 server ignores notes. Tasks it prunes leave their notes
+  behind (the sweep deletes them after an upgrade again), and a task it claims
+  keeps the note cursor of the lease before, so `bridge_task_notes` can skip notes
+  up to that cursor until the next claim, which delivers all notes again.
+- `bridge_replace`: the original enqueuer (`sender` equal to `enqueued_by`) can
+  replace a still-pending task's payload, and optionally its `priority` and
+  `delay_seconds`, in place, and resets `attempts`. Claimed or finished tasks and
+  tasks enqueued without `enqueued_by` are rejected.
+- **Task titles.** `bridge_enqueue` and `bridge_replace` take an optional
+  `title` (1..120 characters). Without one the bridge derives it from the
+  payload (`title` or `task` field, else the text; first line, 80 characters).
+  Task views, `bridge_tasks` and `bridge_claim` show it.
+- **Usage reports.** `POST /api/participants/{name}/usage` stores a
+  participant's latest five-hour and weekly Claude rate-limit use.
+  `scripts/claude-statusline-usage.py` is a Claude Code `statusLine` command
+  that sends it at most once a minute.
+- **Participants in the dashboard.** `/api/state` has `participants` with
+  presence, the current task (title, claim time) and usage. The dashboard shows
+  them in a Participants panel (compact on mobile).
+- Schema: new nullable `tasks.title` and five `participants.usage_*` columns.
+  An older database upgrades in place; the task-queue schema version stays 1.
+
+### Fixed
+
+- The dashboard failed to render messages: the timestamp formatter was lost in an
+  earlier merge, so a message row threw a `ReferenceError`.
+
 ## [1.3.0] - 2026-08-23
 
 Task queue: the first step from a message bus toward an agent orchestration

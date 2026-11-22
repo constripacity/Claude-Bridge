@@ -314,3 +314,18 @@ def test_dashboard_jsx_served_as_static(client):
     r = client.get("/shared.jsx")
     assert r.status_code == 200
     assert "SENDER_COLORS" in r.text
+
+
+def test_dashboard_assets_require_revalidation(client):
+    """Browsers must revalidate the dashboard so a deploy reaches open tabs."""
+    import os
+    for name in ("index.html", "app.js"):
+        if not os.path.isfile(os.path.join(bridge.WEB_DIR, name)):
+            pytest.skip(f"{name} not present")
+    for path in ("/", "/app.js"):
+        r = client.get(path)
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "no-cache"
+        revalidated = client.get(path, headers={"If-None-Match": r.headers["etag"]})
+        assert revalidated.status_code == 304
+        assert revalidated.headers["cache-control"] == "no-cache"

@@ -215,7 +215,11 @@ before making support claims.
 | `bridge_claim` | Atomically claim the next task with a lease; long-poll with `wait_seconds` |
 | `bridge_complete` | Mark a claimed task done, fenced by its `lease_token` |
 | `bridge_fail` | Fail a claimed task — requeue with backoff, or dead-letter |
-| `bridge_tasks` | Inspect a channel's queue: per-status counts and a task list |
+| `bridge_tasks` | Inspect a channel's queue: per-status counts and a task list (with `worked_by`) |
+| `bridge_task_note` | Attach a note to a pending or claimed task for its worker |
+| `bridge_task_notes` | Read a claimed task's new notes, fenced by its `lease_token` |
+| `bridge_participants` | List participants: presence, live task and Claude usage |
+| `bridge_replace` | Replace a pending task's payload in place (original enqueuer only; resets `attempts`, needs `enqueued_by`) |
 
 Tool results include structured data for clients that support MCP structured
 content and a readable text representation for compatibility.
@@ -283,6 +287,12 @@ bridge_enqueue(
 )
 ```
 
+A task has a `title` for lists and the dashboard (1..120 characters). Without
+one, the bridge derives it from the payload: the `title` or `task` field of a
+JSON object, else the payload text, reduced to its first line and cut to 80
+characters. `bridge_replace` derives it again from the new payload unless you
+give a `title`.
+
 Each worker claims the next task, holding a lease (a visibility timeout). Two
 workers never get the same task; `wait_seconds` long-polls an empty queue:
 
@@ -303,6 +313,64 @@ If a worker crashes and never resolves its task, the lease expires and the task
 is requeued automatically — or dead-lettered once `max_attempts` is exhausted.
 This is **at-least-once** delivery, so make task handlers idempotent.
 `bridge_tasks(channel="builds")` shows the queue's per-status counts.
+Until a worker claims it, the enqueuer can swap a task's payload in place with
+`bridge_replace(channel, task_id, sender=<enqueued_by>, payload=…)`.
+
+An orchestrator can correct a task after it was enqueued, without a new task:
+
+```text
+bridge_task_note(channel="builds", task_id="tsk_…", sender="orchestrator", content="use branch b")
+```
+
+`bridge_claim` returns every note so far in `task.notes`. While the worker holds
+the lease, `bridge_task_notes(channel, task_id, lease_token)` returns only the new
+ones, and `bridge_complete`/`bridge_fail` return any still unread in
+`unread_notes`. A requeued task gives the next worker all notes again. A finished
+task rejects notes (`not_active`). Because every claim returns all notes, they are
+bounded: 16 KiB per note (`content`/`too_large`), 64 KiB in total per task
+(`content`/`task_notes_too_large`) and 100 notes per task (`task_id`/`too_many_notes`).
+
+`bridge_participants` lists senders and consumers, newest first (`limit`, default
+100, max 500), with the same entries as `participants` in `/api/state` (see
+below): presence, the live task, open tasks and the latest Claude usage. Its text
+has one line per participant, for example
+`w1 · online · 5h 42% (resets 01:20Z) · wk 71% (resets 2026-11-27) · usage 3 min old · no task`,
+with `(stale)` after a stale report and `usage: not reported` without one, so an
+agent can pick the worker with the most headroom. Names are self-declared, because all
+clients share one bearer token: treat the list as a presence hint, not identity.
+
+### Report Claude usage from the status line
+
+`scripts/claude-statusline-usage.py` is a Claude Code `statusLine` command
+(stdlib only, Python 3.9+). It prints a short line such as `5h 42% | wk 17%`
+and posts the five-hour and weekly rate-limit windows to the bridge, at most
+once a minute, from a detached child process that exits within 3 seconds.
+The dashboard then shows them per participant. Claude Code sends
+`rate_limits` only to Pro, Max and Ultra subscribers and only after the first
+API response; without it the script prints `-` and sends nothing.
+
+Copy the script to a stable path and add it to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "python3 ~/.claude/claude-statusline-usage.py"
+  }
+}
+```
+
+Set these variables in the environment that starts Claude Code, never in a
+committed file:
+
+| Variable | Value |
+|---|---|
+| `CLAUDE_BRIDGE_URL` | The bridge base URL, for example `http://127.0.0.1:8765` |
+| `CLAUDE_BRIDGE_TOKEN` | The bridge bearer token, if the bridge uses one |
+| `CLAUDE_BRIDGE_PARTICIPANT` | The participant name, the same as your `sender`/`consumer` |
+
+The script sends the bearer token with every report. Use an `https://` URL, or
+plain HTTP only on loopback or through a trusted proxy.
 
 ## Channels
 
@@ -345,16 +413,30 @@ Core HTTP endpoints:
 | Endpoint | Purpose |
 |---|---|
 | `GET /status` | Minimal unauthenticated health check |
-| `GET /api/state` | Channel counts, senders, version, and uptime |
+| `GET /api/state` | Channel counts, senders, version, uptime, and participants |
 | `GET /api/messages?channel=X&since_id=Y&limit=N` | Bounded channel history |
 | `GET /api/messages/{id}` | One message detail |
 | `GET /api/wait?channel=X&consumer_id=Y` | Bounded long poll using a consumer or message cursor |
 | `POST /api/send` | Send legacy text or a protocol-v1 message, with optional idempotency |
 | `POST /api/ack` | Advance one durable consumer cursor |
 | `POST /api/clear` | Clear one channel |
+| `POST /api/participants/{name}/usage` | Store a participant's latest Claude usage report |
 | `GET`, `POST`, `DELETE /api/session` | Inspect, create, or revoke an opaque dashboard session |
 | `GET /api/audit?limit=N` | Recent audit events when enabled |
 | `GET /events/channel/<channel>` | Live event stream with bounded replay |
+
+`participants` in `/api/state` lists the newest 100 participants with
+`presence` (`online` when seen in the last 10 minutes, `idle` in the last 24
+hours, else `offline`, by server time), `current_task` (`id`, `title`,
+`claimed_since`) or `null`, and `usage` or `null`. `usage.stale_at` is
+`reported_at` plus 15 minutes; after it the report is stale.
+
+The usage endpoint takes
+`{"session": {"used_pct": 42, "resets_at": 1767225600}, "weekly": {...}}`:
+each window is optional, `used_pct` is 0..100 and `resets_at` is unix seconds
+or ISO-8601 with an offset; any other key is a 400. A report replaces the one
+before. The `{name}` segment follows the participant name rules, so it may hold
+`/` (raw or as `%2F`).
 
 The event stream can drop a slow subscriber after its buffer fills; durable
 history remains authoritative. Reconnect with the last message ID and honor
@@ -404,6 +486,7 @@ session, and a server restart invalidates all in-memory dashboard sessions.
 | `CLAUDE_BRIDGE_SESSION_TTL_SECONDS` | `28800` | Opaque dashboard-session lifetime |
 | `CLAUDE_BRIDGE_EVENT_POLL_MS` | `500` | Cross-process outbox polling interval |
 | `CLAUDE_BRIDGE_EVENT_RETENTION_DAYS` | `7` | Retain delivered outbox records |
+| `CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS` | `7` | Forget participants that hold no task after this many idle days; `0` keeps them |
 | `--no-dashboard` | off | Do not mount browser assets |
 | `CLAUDE_BRIDGE_MAX_REQUEST_BYTES` | `262144` | Maximum HTTP request body |
 | `CLAUDE_BRIDGE_MAX_MESSAGE_BYTES` | `131072` | Maximum encoded message |

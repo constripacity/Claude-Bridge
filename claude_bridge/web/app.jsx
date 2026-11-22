@@ -6,9 +6,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import DashboardDesktop from './dashboard-desktop.jsx';
 import DashboardMobile from './dashboard-mobile.jsx';
+import { withReceiptTime } from './shared.jsx';
 
 const POLL_MS = 2000;
-const MOBILE_MAX = 640;
+// Desktop side columns need 200 + 280px (clamp in dashboard-desktop.jsx); below this the feed is too narrow.
+const MOBILE_MAX = 900;
 
 class AuthError extends Error {
   constructor(message) {
@@ -211,6 +213,48 @@ function storeActiveChannel(channel) {
   } catch (_) {}
 }
 
+// Rendered inside the dashboard header so it never covers the header icons.
+function AuthControl({ authState, onSignIn, onSignOut }) {
+  if (authState.active) {
+    return (
+      <div style={{
+        background: 'rgba(63, 185, 80, 0.12)',
+        border: '1px solid rgba(63, 185, 80, 0.4)',
+        borderRadius: 6, padding: '4px 10px',
+        fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)',
+        display: 'flex', alignItems: 'center', gap: 8,
+        flexShrink: 0, whiteSpace: 'nowrap',
+      }}>
+        <span>Session ✓</span>
+        <button
+          onClick={onSignOut}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(63, 185, 80, 0.4)',
+            borderRadius: 4, padding: '1px 6px', color: 'var(--green)',
+            fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer',
+          }}
+          title="End dashboard session"
+        >logout</button>
+      </div>
+    );
+  }
+  if (!authState.required) return null;
+  return (
+    <button
+      onClick={onSignIn}
+      style={{
+        background: 'rgba(88, 166, 255, 0.14)',
+        border: '1px solid rgba(88, 166, 255, 0.5)',
+        borderRadius: 6, padding: '5px 10px',
+        fontFamily: 'var(--mono)', fontSize: 11,
+        color: 'var(--blue)', cursor: 'pointer',
+        flexShrink: 0, whiteSpace: 'nowrap',
+      }}
+    >Sign in</button>
+  );
+}
+
 function App() {
   const [state, setState] = useState(null);
   const [activeChannel, setActiveChannel] = useState(readActiveChannel);
@@ -240,7 +284,7 @@ function App() {
   const refreshState = useCallback(async () => {
     try {
       const nextState = await fetchJson('/api/state');
-      setState(nextState);
+      setState(withReceiptTime(nextState));
       setError(null);
     } catch (caught) {
       setError(String(caught));
@@ -451,69 +495,45 @@ function App() {
   const Dashboard = width <= MOBILE_MAX ? DashboardMobile : DashboardDesktop;
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: 'var(--bg-base)' }}>
-      <Dashboard
-        state={state}
-        activeChannel={activeChannel}
-        channelMeta={channelMeta}
-        messages={messages}
-        selectedId={selectedMsg?.id}
-        detail={detail}
-        onSelectChannel={handleSelectChannel}
-        onSelectMessage={handleSelectMessage}
-        onSend={handleSend}
-        onClear={handleClear}
-        onNewChannel={handleNewChannel}
-        defaultSender={sender}
-      />
+    <div style={{
+      width: '100%', height: '100%', background: 'var(--bg-base)',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <Dashboard
+          state={state}
+          activeChannel={activeChannel}
+          channelMeta={channelMeta}
+          messages={messages}
+          selectedId={selectedMsg?.id}
+          detail={detail}
+          onSelectChannel={handleSelectChannel}
+          onSelectMessage={handleSelectMessage}
+          onSend={handleSend}
+          onClear={handleClear}
+          onNewChannel={handleNewChannel}
+          defaultSender={sender}
+          authControl={(
+            <AuthControl
+              authState={authState}
+              onSignIn={handleSignIn}
+              onSignOut={handleSignOut}
+            />
+          )}
+        />
+      </div>
 
+      {/* In the layout flow, so the error bar never covers the composer. */}
       {error && (
         <div style={{
-          position: 'fixed', bottom: 12, right: 12, maxWidth: 360,
+          flexShrink: 0,
           background: 'rgba(248, 81, 73, 0.12)',
-          border: '1px solid rgba(248, 81, 73, 0.4)',
-          borderRadius: 6, padding: '8px 12px',
+          borderTop: '1px solid rgba(248, 81, 73, 0.4)',
+          padding: '8px 16px',
           fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)',
-          zIndex: 100,
+          overflowWrap: 'anywhere',
         }}>
           {error}
-        </div>
-      )}
-
-      {authState.required && !authState.active && (
-        <button
-          onClick={handleSignIn}
-          style={{
-            position: 'fixed', top: 12, right: 12,
-            background: 'rgba(88, 166, 255, 0.14)',
-            border: '1px solid rgba(88, 166, 255, 0.5)',
-            borderRadius: 6, padding: '5px 10px',
-            fontFamily: 'var(--mono)', fontSize: 11,
-            color: 'var(--blue)', cursor: 'pointer', zIndex: 100,
-          }}
-        >Sign in</button>
-      )}
-
-      {authState.active && (
-        <div style={{
-          position: 'fixed', top: 12, right: 12,
-          background: 'rgba(63, 185, 80, 0.12)',
-          border: '1px solid rgba(63, 185, 80, 0.4)',
-          borderRadius: 6, padding: '4px 10px',
-          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)',
-          display: 'flex', alignItems: 'center', gap: 8, zIndex: 100,
-        }}>
-          <span>Session ✓</span>
-          <button
-            onClick={handleSignOut}
-            style={{
-              background: 'transparent',
-              border: '1px solid rgba(63, 185, 80, 0.4)',
-              borderRadius: 4, padding: '1px 6px', color: 'var(--green)',
-              fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer',
-            }}
-            title="End dashboard session"
-          >logout</button>
         </div>
       )}
     </div>

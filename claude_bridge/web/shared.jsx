@@ -264,7 +264,7 @@ function ParticipantActivity({ p, nowMs }) {
     const waiting = p.open_tasks > 0;
     return (
       <span style={{ color: waiting ? 'var(--text-mid)' : 'var(--text-faint)' }}>
-        {waiting ? `waiting on ${p.open_tasks} task${p.open_tasks === 1 ? '' : 's'}` : 'idle'}
+        {waiting ? `waiting on ${p.open_tasks} task${p.open_tasks === 1 ? '' : 's'}` : 'no task'}
       </span>
     );
   }

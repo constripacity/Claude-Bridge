@@ -11,13 +11,16 @@ import {
   HighlightedJson,
   Icon,
   LiveDot,
+  ParticipantRow,
   SenderPill,
   SENDER_COLORS,
+  fmtTs,
+  serverNowMs,
 } from './shared.jsx';
 
 const { useState } = React;
 
-function HeaderBar({ state }) {
+function HeaderBar({ state, authControl }) {
   const totals = {
     channels: state?.channels?.length ?? 0,
     messages: state?.total_messages ?? 0,
@@ -65,6 +68,7 @@ function HeaderBar({ state }) {
         <HeaderBtn><Icon name="search" size={14} color="var(--text-mid)" /></HeaderBtn>
         <HeaderBtn><Icon name="book"   size={14} color="var(--text-mid)" /></HeaderBtn>
         <HeaderBtn><Icon name="gear"   size={14} color="var(--text-mid)" /></HeaderBtn>
+        {authControl}
       </div>
     </div>
   );
@@ -442,7 +446,7 @@ function Inspector({ detail }) {
     return (
       <div style={{
         width: 360, background: 'var(--bg-base)',
-        display: 'flex', flexDirection: 'column',
+        display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
       }}>
         <ChromeLabel>Inspector</ChromeLabel>
         <div style={{
@@ -458,7 +462,7 @@ function Inspector({ detail }) {
   return (
     <div style={{
       width: 360, background: 'var(--bg-base)',
-      display: 'flex', flexDirection: 'column',
+      display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0,
     }}>
       <ChromeLabel>Inspector</ChromeLabel>
 
@@ -516,6 +520,28 @@ function Inspector({ detail }) {
   );
 }
 
+function ParticipantsPanel({ state }) {
+  const participants = state?.participants || [];
+  const nowMs = serverNowMs(state);
+  return (
+    <div style={{
+      maxHeight: '45%', display: 'flex', flexDirection: 'column',
+      borderTop: '1px solid var(--hairline)', background: 'var(--bg-base)',
+    }}>
+      <ChromeLabel count={participants.length}>Participants</ChromeLabel>
+      <div style={{ overflowY: 'auto' }}>
+        {participants.map(p => <ParticipantRow key={p.name} p={p} nowMs={nowMs} />)}
+        {participants.length === 0 && (
+          <div style={{
+            padding: '8px 14px 16px', fontFamily: 'var(--mono)', fontSize: 11,
+            color: 'var(--text-faint)',
+          }}>No participants seen yet.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const KV = ({ k, v, mono, color }) => (
   <div style={{
     display: 'grid', gridTemplateColumns: '90px 1fr',
@@ -553,7 +579,7 @@ function DashboardDesktop(props) {
       display: 'flex', flexDirection: 'column',
       overflow: 'hidden',
     }}>
-      <HeaderBar state={props.state} />
+      <HeaderBar state={props.state} authControl={props.authControl} />
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <Sidebar
           channels={props.state?.channels}
@@ -571,7 +597,10 @@ function DashboardDesktop(props) {
           onClear={props.onClear}
           defaultSender={props.defaultSender}
         />
-        <Inspector detail={props.detail} />
+        <div style={{ width: 360, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <Inspector detail={props.detail} />
+          <ParticipantsPanel state={props.state} />
+        </div>
       </div>
     </div>
   );

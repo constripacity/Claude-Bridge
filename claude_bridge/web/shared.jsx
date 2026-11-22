@@ -2,6 +2,22 @@
 
 import React from 'react';
 
+// A UTC ISO timestamp as the viewer's local time with a zone label;
+// the raw value on a parse failure rather than "Invalid Date".
+function fmtTs(iso, withDate = false) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const opts = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
+  let zone = '';
+  try {
+    const z = new Intl.DateTimeFormat(undefined, { ...opts, timeZoneName: 'short' })
+      .formatToParts(d).find(p => p.type === 'timeZoneName');
+    zone = z ? ' ' + z.value : '';
+  } catch (e) { /* older engines: no zone label */ }
+  return (withDate ? d.toLocaleDateString() + ' ' : '') + d.toLocaleTimeString(undefined, opts) + zone;
+}
+
 const Icon = ({ name, size = 16, stroke = 1.5, color = 'currentColor' }) => {
   const paths = {
     plus:    <path d="M8 3v10M3 8h10" />,
@@ -161,7 +177,178 @@ const BridgeMark = ({ size = 24, color = 'var(--blue)' }) => (
   </svg>
 );
 
+// ── Participants ─────────────────────────────────────────────────────────────
+
+const PRESENCE_COLORS = {
+  online: 'var(--green)', idle: 'var(--amber)', offline: 'var(--text-faint)',
+};
+
+function fmtSpan(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+const ageMs = (iso, nowMs) => nowMs - Date.parse(iso);
+const fmtAgo = (iso, nowMs) => (iso ? `${fmtSpan(ageMs(iso, nowMs))} ago` : '—');
+// A past reset time means the window rolled over, so the shown use is stale.
+const resetHasPassed = (iso, nowMs) => Boolean(iso) && ageMs(iso, nowMs) >= 0;
+const fmtTimeToReset = (iso, nowMs) => fmtSpan(-ageMs(iso, nowMs));
+function fmtReset(iso, nowMs) {
+  if (!iso) return '';
+  return resetHasPassed(iso, nowMs)
+    ? `reset ${fmtAgo(iso, nowMs)}`
+    : `resets in ${fmtTimeToReset(iso, nowMs)}`;
+}
+// The server owns the stale threshold and sends the cutoff.
+const usageIsStale = (usage, nowMs) => nowMs > Date.parse(usage.stale_at);
+
+const PresenceDot = ({ presence, size = 7 }) => (
+  <span title={presence} style={{
+    width: size, height: size, borderRadius: '50%', flexShrink: 0,
+    background: PRESENCE_COLORS[presence] || PRESENCE_COLORS.offline,
+  }} />
+);
+
+// Over 80 % the bar turns amber, over 95 % red, like a gauge near its limit.
+function usageColor(pct) {
+  if (pct >= 95) return 'var(--red)';
+  if (pct >= 80) return 'var(--amber)';
+  return 'var(--blue)';
+}
+
+function UsageBar({ label, usageWindow, stale, nowMs, compact }) {
+  if (!usageWindow) return null;
+  const pct = Math.min(100, Math.max(0, usageWindow.used_pct));
+  const resetPassed = resetHasPassed(usageWindow.resets_at, nowMs);
+  const dim = stale || resetPassed;
+  return (
+    <div title={fmtReset(usageWindow.resets_at, nowMs)} style={{
+      display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0,
+      opacity: dim ? 0.4 : 1,
+      fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)',
+    }}>
+      <span style={{ width: compact ? 16 : 24, flexShrink: 0 }}>{label}</span>
+      <span style={{
+        flex: 1, height: 4, borderRadius: 2, minWidth: 24,
+        background: 'var(--hairline-strong)', overflow: 'hidden',
+      }}>
+        <span style={{
+          display: 'block', height: '100%', width: `${pct}%`,
+          background: dim ? 'var(--text-faint)' : usageColor(pct),
+        }} />
+      </span>
+      <span style={{
+        width: 26, textAlign: 'right', flexShrink: 0,
+        color: 'var(--text-mid)', fontVariantNumeric: 'tabular-nums',
+      }}>{Math.round(pct)}%</span>
+      {!compact && usageWindow.resets_at && (
+        <span style={{ flexShrink: 0, color: 'var(--text-faint)' }}>
+          ↻ {resetPassed ? 'reset' : fmtTimeToReset(usageWindow.resets_at, nowMs)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function UsageBars({ usage, nowMs, compact }) {
+  if (!usage || (!usage.session && !usage.weekly)) return null;
+  const stale = usageIsStale(usage, nowMs);
+  return (
+    <div title={stale ? `usage reported ${fmtAgo(usage.reported_at, nowMs)}` : undefined}
+         style={{ display: 'flex', gap: compact ? 8 : 12 }}>
+      <UsageBar label="5h" usageWindow={usage.session} stale={stale} nowMs={nowMs} compact={compact} />
+      <UsageBar label="week" usageWindow={usage.weekly} stale={stale} nowMs={nowMs} compact={compact} />
+    </div>
+  );
+}
+
+// What the participant does now: its task, channel and time since the claim.
+function ParticipantActivity({ p, nowMs }) {
+  const task = p.current_task;
+  if (!task) {
+    const waiting = p.open_tasks > 0;
+    return (
+      <span style={{ color: waiting ? 'var(--text-mid)' : 'var(--text-faint)' }}>
+        {waiting ? `waiting on ${p.open_tasks} task${p.open_tasks === 1 ? '' : 's'}` : 'no task'}
+      </span>
+    );
+  }
+  return (
+    <span style={{
+      display: 'flex', gap: 6, minWidth: 0, alignItems: 'baseline',
+    }}>
+      <span style={{
+        color: 'var(--text-mid)', minWidth: 0,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>{task.title || task.id}</span>
+      <span style={{ color: 'var(--blue)', flexShrink: 0 }}>#{p.current_channel}</span>
+      <span style={{ color: 'var(--text-faint)', flexShrink: 0 }}>
+        {fmtSpan(ageMs(task.claimed_since, nowMs))}
+      </span>
+    </span>
+  );
+}
+
+function ParticipantRow({ p, nowMs, compact = false }) {
+  return (
+    <div style={{
+      padding: compact ? '6px 16px' : '8px 14px',
+      borderBottom: '1px solid var(--hairline)',
+      display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: compact ? 4 : 5,
+      fontFamily: 'var(--mono)', fontSize: compact ? 10 : 11,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <PresenceDot presence={p.presence} />
+        <span style={{
+          color: 'var(--text)', fontWeight: 500, flexShrink: 0,
+          maxWidth: compact ? '40%' : '55%',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{p.name}</span>
+        {compact
+          ? <span style={{ minWidth: 0, flex: 1, display: 'flex' }}>
+              <ParticipantActivity p={p} nowMs={nowMs} />
+            </span>
+          : <span style={{ marginLeft: 'auto', color: 'var(--text-faint)', fontSize: 10 }}>
+              {fmtAgo(p.last_seen, nowMs)}
+            </span>}
+      </div>
+      {!compact && (
+        <div style={{ paddingLeft: 15, minWidth: 0, display: 'flex' }}>
+          <ParticipantActivity p={p} nowMs={nowMs} />
+        </div>
+      )}
+      <div style={{ paddingLeft: 15 }}>
+        <UsageBars usage={p.usage} nowMs={nowMs} compact={compact} />
+      </div>
+    </div>
+  );
+}
+
+// Counts per presence, e.g. "2 online · 1 idle", for a collapsed header.
+function presenceSummary(participants) {
+  const counts = {};
+  participants.forEach(p => { counts[p.presence] = (counts[p.presence] || 0) + 1; });
+  return ['online', 'idle', 'offline']
+    .filter(k => counts[k]).map(k => `${counts[k]} ${k}`).join(' · ') || 'none';
+}
+
+// Marks when a state arrived, so serverNowMs can advance between polls.
+const withReceiptTime = (state) => ({ ...state, receivedAtMs: performance.now() });
+
+// The server clock plus the client time since the fetch, so ages agree with the server.
+function serverNowMs(state) {
+  const serverMs = Date.parse(state?.server_time);
+  if (!serverMs) return Date.now();
+  return serverMs + (performance.now() - (state.receivedAtMs ?? performance.now()));
+}
+
 export {
   Icon, LiveDot, Eyebrow, SenderPill, HighlightedJson, ChromeLabel,
-  BridgeMark, SENDER_COLORS,
+  BridgeMark, SENDER_COLORS, fmtTs,
+  ParticipantRow, presenceSummary, serverNowMs, withReceiptTime,
 };

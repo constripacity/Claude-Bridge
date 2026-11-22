@@ -25,6 +25,7 @@ from .validation import (
     BridgeValidationError,
     ValidationLimits,
     canonical_json,
+    loads_bounded_json,
     validate_idempotency_key,
     validate_json_value,
     validate_message_type,
@@ -406,8 +407,8 @@ def parse_message_content(raw: str) -> ParsedMessage:
     if not isinstance(raw, str):
         raise TypeError("stored message content must be a string")
     try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, RecursionError):
+        value = loads_bounded_json(raw)
+    except (ValueError, TypeError):
         return ParsedMessage(raw=raw, encoding=MessageEncoding.LEGACY_TEXT)
 
     if not _looks_like_envelope(value):

@@ -19,7 +19,8 @@ versioning where the Python packaging format allows.
 - **Ownership history.** Every task view now has `worked_by`, the last consumer
   that claimed the task. Unlike `lease_owner` it is kept after the task ends.
 - **Participants.** `bridge_participants` lists every sender and consumer with
-  `last_seen` and the newest task it holds a live lease on. Names are
+  the same entries as `/api/state`: presence, the live task, open tasks and the
+  latest usage report (one text line each, with stale reports marked). Names are
   self-declared (one shared bearer token), so this is a presence hint, not an
   identity. It returns the newest 100 by default (`limit`, max 500). Participants
   that hold no task are pruned after `CLAUDE_BRIDGE_PARTICIPANT_IDLE_DAYS` (default

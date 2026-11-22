@@ -71,7 +71,7 @@ Channel names and recipients route messages; they are not access-control rules.
 | `bridge_tasks` | Inspect a channel's queue counts and tasks |
 | `bridge_task_note` | Attach a note (e.g. a correction) to a pending or claimed task |
 | `bridge_task_notes` | Read new notes on a task you hold, fenced by its lease token |
-| `bridge_participants` | See who is active and which task each participant holds |
+| `bridge_participants` | See who is active, which task each holds, and its usage headroom |
 
 Prefer `bridge_wait` while idle. Use `bridge_receive` for a bounded startup
 snapshot or explicit resynchronization.

@@ -182,7 +182,6 @@ const BridgeMark = ({ size = 24, color = 'var(--blue)' }) => (
 const PRESENCE_COLORS = {
   online: 'var(--green)', idle: 'var(--amber)', offline: 'var(--text-faint)',
 };
-const USAGE_STALE_MS = 15 * 60 * 1000;
 
 function fmtSpan(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -197,7 +196,8 @@ function fmtSpan(ms) {
 const ageMs = (iso, nowMs) => nowMs - Date.parse(iso);
 const fmtAgo = (iso, nowMs) => (iso ? `${fmtSpan(ageMs(iso, nowMs))} ago` : '—');
 const fmtResetIn = (iso, nowMs) => (iso ? `resets in ${fmtSpan(-ageMs(iso, nowMs))}` : '');
-const usageIsStale = (usage, nowMs) => ageMs(usage.reported_at, nowMs) > USAGE_STALE_MS;
+// The server owns the stale threshold and sends the cutoff.
+const usageIsStale = (usage, nowMs) => nowMs > Date.parse(usage.stale_at);
 
 const PresenceDot = ({ presence, size = 7 }) => (
   <span title={presence} style={{
@@ -261,7 +261,12 @@ function UsageBars({ usage, nowMs, compact }) {
 function ParticipantActivity({ p, nowMs }) {
   const task = p.current_task;
   if (!task) {
-    return <span style={{ color: 'var(--text-faint)' }}>idle</span>;
+    const waiting = p.open_tasks > 0;
+    return (
+      <span style={{ color: waiting ? 'var(--text-mid)' : 'var(--text-faint)' }}>
+        {waiting ? `waiting on ${p.open_tasks} task${p.open_tasks === 1 ? '' : 's'}` : 'idle'}
+      </span>
+    );
   }
   return (
     <span style={{

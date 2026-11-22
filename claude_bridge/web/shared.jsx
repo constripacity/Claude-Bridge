@@ -276,7 +276,7 @@ function ParticipantActivity({ p, nowMs }) {
     }}>
       <span style={{
         color: 'var(--text-mid)', minWidth: 0,
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        ...TRUNCATE,
       }}>{task.title || task.id}</span>
       <span title={p.current_channel} style={{ color: 'var(--blue)', maxWidth: '45%', ...TRUNCATE }}>
         #{p.current_channel}
@@ -301,7 +301,7 @@ function ParticipantRow({ p, nowMs, compact = false }) {
         <span style={{
           color: 'var(--text)', fontWeight: 500, flexShrink: 0,
           maxWidth: compact ? '40%' : '55%',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          ...TRUNCATE,
         }}>{p.name}</span>
         {compact
           ? <span style={{ minWidth: 0, flex: 1, display: 'flex' }}>

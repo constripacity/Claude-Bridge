@@ -193,7 +193,7 @@ function ChannelRow({ c, active, onSelect }) {
           fontFamily: 'var(--mono)', fontSize: 12,
           color: active ? 'var(--text)' : 'var(--text-mid)',
           fontWeight: active ? 500 : 400, flex: 1,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          ...TRUNCATE,
         }}>{c.name}</span>
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 10,
@@ -315,7 +315,7 @@ function MessageRow({ m, selected, onSelect }) {
       <span style={{
         fontFamily: 'var(--mono)', fontSize: 12,
         color: selected ? 'var(--text)' : 'var(--text-mid)',
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        ...TRUNCATE,
         minWidth: 0,
       }}>{m.preview}</span>
 
@@ -567,7 +567,7 @@ const KV = ({ k, v, mono, color }) => (
     <span style={{
       fontFamily: mono ? 'var(--mono)' : 'var(--sans)',
       color: color || 'var(--text)',
-      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      ...TRUNCATE,
     }}>{v}</span>
   </div>
 );
